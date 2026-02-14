@@ -1,0 +1,24 @@
+{
+  "name": "oasis",
+  "version": "0.1.0",
+  "description": "General-purpose browser automation agent powered by Playwright + OpenAI",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "postinstall": "playwright install chromium"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.0",
+    "js-yaml": "^4.1.1",
+    "openai": "^4.70.0",
+    "playwright": "^1.49.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

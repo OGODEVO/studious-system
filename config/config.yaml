@@ -1,0 +1,27 @@
+system:
+  model: "gpt-4o"
+  temperature: 0.3
+  max_tokens: 16384
+
+browser:
+  headless: true
+  viewport:
+    width: 1280
+    height: 900
+  timeout: 15000        # navigation timeout in ms
+  user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+
+tools:
+  extract_max_chars: 3000
+  max_links: 30
+  search_results: 8
+
+memory:
+  extraction_model: "gpt-4o-mini"             # any OpenAI v1-compatible model
+  extraction_base_url: ""                      # leave empty for OpenAI, or set e.g. "https://api.novita.ai/v3/openai"
+  extraction_api_key: ""                       # leave empty to use OPENAI_API_KEY, or set a separate key
+  extraction_temperature: 0.1
+  extraction_max_tokens: 1024                  # max tokens for memory extraction responses
+  extract_every_n_turns: 3                     # run episodic extraction every N turns
+  compaction_threshold: 20                     # flush all memory types when history exceeds this
+  max_recent_episodes: 5                       # how many episodes to load at bootstrap
