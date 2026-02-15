@@ -1,0 +1,55 @@
+# ===========================================================================
+# Memory Agent Configuration
+# ===========================================================================
+# This config controls the memory extraction sub-agent that decides what
+# to persist from conversations into the CoALA-aligned memory stores.
+# ---------------------------------------------------------------------------
+
+# --- LLM Settings for the Memory Agent ---
+model:
+  name: "gpt-4o-mini"            # any OpenAI v1-compatible model
+  base_url: ""                   # leave empty for OpenAI, or set e.g. "https://api.novita.ai/v3/openai"
+  api_key: ""                    # leave empty to fall back to OPENAI_API_KEY env var
+  temperature: 0.1               # low temp → deterministic, precise memory decisions
+  max_tokens: 1024               # max completion tokens per extraction call
+
+# --- Extraction Triggers ---
+extraction:
+  every_n_turns: 3               # run episodic extraction every N user turns
+  compaction_threshold: 20       # flush all memory types when history exceeds this many messages
+  max_tool_iterations: 8         # max search → read → write cycles per extraction run
+  force_finish_after: 6          # force tool_choice=none after this many iterations
+
+# --- Memory Stores (CoALA-aligned) ---
+stores:
+  semantic:
+    file: "memory/semantic/memory.md"
+    description: "Stable facts, user preferences, and project details"
+    default_section: "Known Facts"
+    initial_sections:
+      - "User Preferences"
+      - "Known Facts"
+      - "Workflow Notes"
+
+  episodic:
+    directory: "memory/episodic/"
+    description: "Time-stamped experience logs (one file per day)"
+    format: "Task: <what> | Approach: <how> | Outcome: <result>"
+    max_recent: 5                # episodes loaded at bootstrap
+
+  procedural:
+    file: "memory/procedural/rules.md"
+    description: "Learned behaviors, rules, and patterns"
+    default_section: "Learned Behaviors"
+
+# --- Snapshots ---
+snapshots:
+  directory: "memory/snapshots/"
+  filename_format: "session_{timestamp}.md"   # timestamp = ISO with colons replaced by dashes
+
+# --- Quality Controls ---
+quality:
+  skip_if_history_under: 4       # don't extract from conversations shorter than this
+  dedup_check: true              # always search before writing to prevent duplicates
+  max_search_results: 15         # cap search results to keep context manageable
+  search_episodic_files: 5       # how many recent episodic files to search
