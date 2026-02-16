@@ -1,10 +1,12 @@
 import * as readline from "readline";
-import { runAgent, type Message } from "./agent.js";
+import { type Message, type OnTokenCallback } from "./agent.js";
+import { submitTask, getQueueStatus } from "./runtime/taskQueue.js";
 import { launchBrowser, closeBrowser } from "./tools/browser.js";
 import {
     saveSessionSnapshot,
     rememberThis,
 } from "./memory/manager.js";
+import { config } from "./utils/config.js";
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -29,7 +31,8 @@ async function main() {
 
     console.log("   Launching browser...");
     await launchBrowser();
-    console.log("   ✅ Browser ready.\n");
+    console.log("   ✅ Browser ready.");
+    console.log("   Context Window: " + (config.contextWindow || 128000) + ", Compaction Threshold: " + config.compactionTokenThreshold + " tokens\n");
 
     let history: Message[] = [];
 
@@ -100,15 +103,32 @@ async function main() {
             continue;
         }
 
-        // ---- Normal message → agent ----
-        console.log("\n   🤔 Thinking...\n");
+        // ---- /status ----
+        if (trimmed.toLowerCase() === "/status") {
+            const status = getQueueStatus();
+            console.log("   Queue Status:");
+            console.log("     Fast:       " + status.fast.pending + " running, " + status.fast.queued + " queued");
+            console.log("     Slow:       " + status.slow.pending + " running, " + status.slow.queued + " queued");
+            console.log("     Background: " + status.background.pending + " running, " + status.background.queued + " queued\n");
+            continue;
+        }
+
+        // ---- Normal message -> agent (streaming via queue) ----
+        process.stdout.write("\n   Oasis: ");
 
         try {
-            const result = await runAgent(trimmed, history);
-            history = result.history;
-            console.log(`\n🌴 Oasis:\n${result.reply}\n`);
+            const onToken: OnTokenCallback = (token) => {
+                process.stdout.write(token);
+            };
+            const result = await submitTask(trimmed, history, "fast", onToken);
+            if (result.status === "completed") {
+                history = result.history;
+            } else {
+                console.error("\n   Task failed: " + result.error);
+            }
+            process.stdout.write("\n\n");
         } catch (err) {
-            console.error(`   ❌ Error: ${(err as Error).message}\n`);
+            console.error("\n   Error: " + (err as Error).message + "\n");
         }
     }
 }

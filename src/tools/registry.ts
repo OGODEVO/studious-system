@@ -9,6 +9,7 @@ import {
     searchGoogle,
     getCurrentUrl,
 } from "./browser.js";
+import { runCommand } from "./shell.js";
 
 // ---------------------------------------------------------------------------
 // Schema — exposed to OpenAI function calling
@@ -114,6 +115,20 @@ export const TOOLS_SCHEMA: ChatCompletionTool[] = [
             parameters: { type: "object", properties: {} },
         },
     },
+    {
+        type: "function",
+        function: {
+            name: "run_command",
+            description: "Execute a shell command. Use for git, npm, file operations. REQUIRES USER APPROVAL.",
+            parameters: {
+                type: "object",
+                properties: {
+                    command: { type: "string", description: "The command to execute (e.g. 'git status', 'npm test')" },
+                },
+                required: ["command"],
+            },
+        },
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -131,4 +146,5 @@ export const AVAILABLE_TOOLS: Record<string, ToolFn> = {
     get_links: () => getLinks(),
     search_google: (a) => searchGoogle(a as { query: string }),
     get_current_url: () => getCurrentUrl(),
+    run_command: (a) => runCommand(a as { command: string }),
 };
