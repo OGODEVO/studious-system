@@ -17,9 +17,13 @@ Oasis is not a chatbot; it is a worker.
 - **Resilience**: It must handle errors, retry strategies, and self-heal without crashing.
 - **Cron/Schdeduling**: It supports scheduled tasks (e.g., "Check this site every 5 minutes").
 
-### 3. Context & Memory
-- **Compartmentalization**: Context is managed in "compartments" (windows/tabs/sessions) to prevent pollution.
-- **Persistence**: Long-term memory is stored structurally (Knowledge Graph / Vector DB) to allow multi-day task continuity.
+### 3. Infinite Context & Memory
+- **Token-Based Compaction**: Triggered dynamically when context usage hits 90% of model window.
+- **Carry-Over Summarization**: Before flushing old messages, we generate a `session_context.md` summary which is permanently injected into the prompt.
+- **Layered Memory**:
+    - **Semantic**: Facts & Preferences (`memory.md`).
+    - **Episodic**: Recent experiences (`episodic/*.md`).
+    - **Procedural**: Learned rules (`rules.md`).
 
 ### 4. Security & Trust
 - **Trust but Verify**: The agent is powerful but gated.
