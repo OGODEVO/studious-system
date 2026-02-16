@@ -1,7 +1,17 @@
 system:
-  model: "gpt-4o"
-  temperature: 0.3
-  max_tokens: 16384
+  model: "minimax/minimax-m2.5"
+  provider: "novita"
+  temperature: 0.7
+  context_window: 204800       # Total context size of the model
+  max_output_tokens: 131100    # Max tokens to generate per turn
+
+providers:
+  novita:
+    base_url: "https://api.novita.ai/openai"
+    api_key: "<Your Novita API Key>"
+  openai:
+    base_url: "https://api.openai.com/v1"
+    api_key: "<Your OpenAI API Key>"
 
 browser:
   headless: true
@@ -23,5 +33,5 @@ memory:
   extraction_temperature: 0.1
   extraction_max_tokens: 1024                  # max tokens for memory extraction responses
   extract_every_n_turns: 3                     # run episodic extraction every N turns
-  compaction_threshold: 20                     # flush all memory types when history exceeds this
+  # compaction_threshold is now derived from system.context_window * 0.7
   max_recent_episodes: 5                       # how many episodes to load at bootstrap

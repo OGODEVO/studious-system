@@ -40,6 +40,7 @@ const PROCEDURAL_DIR = path.join(MEMORY_DIR, "procedural");
 const RULES_FILE = path.join(PROCEDURAL_DIR, "rules.md");
 
 const SNAPSHOTS_DIR = path.join(MEMORY_DIR, "snapshots");
+const SESSION_CONTEXT_FILE = path.join(SEMANTIC_DIR, "session_context.md");
 
 function ensureDirs(): void {
     for (const dir of [SEMANTIC_DIR, EPISODIC_DIR, PROCEDURAL_DIR, SNAPSHOTS_DIR]) {
@@ -101,6 +102,12 @@ export function loadBootstrapContext(): string {
     const episodes = getRecentEpisodes(config.maxRecentEpisodes);
     if (episodes.trim()) {
         parts.push("=== EPISODIC MEMORY (recent experiences) ===\n" + episodes);
+    }
+
+    // Session context (conversation summary from last compaction)
+    const sessionCtx = readFileOrEmpty(SESSION_CONTEXT_FILE);
+    if (sessionCtx.trim()) {
+        parts.push("=== ACTIVE SESSION CONTEXT ===\n" + sessionCtx.trim());
     }
 
     return parts.join("\n\n");
@@ -354,7 +361,58 @@ export async function flushBeforeCompaction(history: Message[]): Promise<void> {
             }
         }
     } catch (err) {
-        console.error(`   ⚠️ Memory flush failed: ${(err as Error).message}`);
+        console.error("   Memory flush failed: " + (err as Error).message);
+    }
+
+    // --- Generate Conversation Summary for carry-over ---
+    try {
+        const summary = await generateConversationSummary(history);
+        if (summary) {
+            ensureDirs();
+            fs.writeFileSync(SESSION_CONTEXT_FILE, summary, "utf-8");
+            console.log("   Session context saved (" + summary.length + " chars)");
+        }
+    } catch (err) {
+        console.error("   Session summary failed: " + (err as Error).message);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Conversation Summarizer — produces a concise "carry-over" paragraph
+// ---------------------------------------------------------------------------
+
+const SUMMARY_PROMPT = `Summarize this conversation in 2-3 concise paragraphs. Focus on:
+1. What the user's current goal/task is
+2. What has been accomplished so far
+3. Any decisions made or preferences expressed
+4. What the next steps are
+
+Be specific and factual. This summary will be injected into a future prompt so the agent can continue the conversation seamlessly.`;
+
+async function generateConversationSummary(history: Message[]): Promise<string | null> {
+    if (history.length < 4) return null;
+
+    const client = getMemoryClient();
+
+    const conversationText = history
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => m.role + ": " + (typeof m.content === "string" ? m.content : ""))
+        .join("\n");
+
+    try {
+        const completion = await client.chat.completions.create({
+            model: config.memoryModel,
+            messages: [
+                { role: "system", content: SUMMARY_PROMPT },
+                { role: "user", content: conversationText },
+            ],
+            temperature: 0.2,
+            max_completion_tokens: config.memoryMaxTokens,
+        });
+
+        return completion.choices[0]?.message?.content || null;
+    } catch {
+        return null;
     }
 }
 

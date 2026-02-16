@@ -1,7 +1,7 @@
 import "dotenv/config";
 import * as fs from "fs";
 import * as path from "path";
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 
 // ---------------------------------------------------------------------------
 // Load YAML config
@@ -15,9 +15,17 @@ const CONFIG_PATH = path.resolve(
 interface OasisConfig {
     system: {
         model: string;
+        provider?: string;
+        api_key?: string; // Fallback / Legacy
+        base_url?: string; // Fallback / Legacy
         temperature: number;
-        max_tokens: number;
+        context_window: number;
+        max_output_tokens: number;
     };
+    providers?: Record<string, {
+        base_url: string;
+        api_key?: string;
+    }>;
     browser: {
         headless: boolean;
         viewport: { width: number; height: number };
@@ -36,7 +44,7 @@ interface OasisConfig {
         extraction_temperature: number;
         extraction_max_tokens: number;
         extract_every_n_turns: number;
-        compaction_threshold: number;
+        // compaction_token_threshold is derived
         max_recent_episodes: number;
     };
 }
@@ -57,14 +65,26 @@ const yamlConfig = loadYamlConfig();
 // Merged config (YAML + env overrides)
 // ---------------------------------------------------------------------------
 
+const activeProvider = yamlConfig.system.provider;
+const providerConfig = (activeProvider && yamlConfig.providers && yamlConfig.providers[activeProvider]) || undefined;
+
+// Dynamic Env Key: e.g. "novita" -> "NOVITA_API_KEY"
+const envKeyName = activeProvider
+    ? `${activeProvider.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}_API_KEY`
+    : "OPENAI_API_KEY";
+const envKey = process.env[envKeyName];
+
 export const config = {
-    // Secrets from .env only
-    openaiKey: process.env.OPENAI_API_KEY ?? "",
+    // Secrets from .env or YAML
+    // Priority: Provider Config > System Config > Provider Env Var > OPENAI_API_KEY
+    openaiKey: providerConfig?.api_key || yamlConfig.system.api_key || envKey || process.env.OPENAI_API_KEY || "",
+    openaiBaseUrl: providerConfig?.base_url || yamlConfig.system.base_url || undefined,
 
     // From YAML (env can override)
     model: process.env.OASIS_MODEL ?? yamlConfig.system.model,
     temperature: yamlConfig.system.temperature,
-    maxTokens: yamlConfig.system.max_tokens,
+    maxTokens: yamlConfig.system.max_output_tokens,
+    contextWindow: yamlConfig.system.context_window || 128000,
 
     // Browser
     headless: process.env.OASIS_HEADLESS !== undefined
@@ -86,7 +106,8 @@ export const config = {
     memoryTemperature: yamlConfig.memory.extraction_temperature,
     memoryMaxTokens: yamlConfig.memory.extraction_max_tokens,
     extractEveryNTurns: yamlConfig.memory.extract_every_n_turns,
-    compactionThreshold: yamlConfig.memory.compaction_threshold,
+    // Dynamic compaction threshold: 90% of context window (leaves ~10% buffer for output)
+    compactionTokenThreshold: Math.floor((yamlConfig.system.context_window || 128000) * 0.9),
     maxRecentEpisodes: yamlConfig.memory.max_recent_episodes,
 } as const;
 
