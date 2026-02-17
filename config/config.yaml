@@ -26,6 +26,12 @@ tools:
   max_links: 30
   search_results: 8
 
+perplexity:
+  base_url: "https://api.perplexity.ai"
+  max_results: 5
+  max_tokens_per_page: 4096
+  country: "US"
+
 memory:
   extraction_model: "gpt-5-mini"             # any OpenAI v1-compatible model
   extraction_base_url: ""                      # leave empty for OpenAI, or set e.g. "https://api.novita.ai/v3/openai"

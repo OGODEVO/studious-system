@@ -63,6 +63,12 @@ interface OasisConfig {
             prompt?: string;
         };
     };
+    perplexity?: {
+        base_url?: string;
+        max_results?: number;
+        max_tokens_per_page?: number;
+        country?: string;
+    };
 }
 
 function loadYamlConfig(): OasisConfig {
@@ -145,6 +151,16 @@ export const config = {
                 "Heartbeat check-in: review queue health, pending tasks, and blockers; then report only actionable next steps.",
         },
     },
+
+    // Perplexity Search
+    perplexityApiKey: process.env.PERPLEXITY_API_KEY || "",
+    perplexityBaseUrl:
+        process.env.PERPLEXITY_BASE_URL ||
+        yamlConfig.perplexity?.base_url ||
+        "https://api.perplexity.ai",
+    perplexityMaxResults: yamlConfig.perplexity?.max_results ?? 5,
+    perplexityMaxTokensPerPage: yamlConfig.perplexity?.max_tokens_per_page ?? 4096,
+    perplexityCountry: yamlConfig.perplexity?.country ?? "US",
 } as const;
 
 if (!config.openaiKey) {

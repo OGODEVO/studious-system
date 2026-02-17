@@ -9,6 +9,7 @@ import {
     searchGoogle,
     getCurrentUrl,
 } from "./browser.js";
+import { perplexitySearch } from "./perplexity.js";
 import { runCommand, selfUpdate, getApprovalInterface } from "./shell.js";
 import { getAddress, getBalance, sendTransaction, callContract } from "./wallet.js";
 
@@ -105,6 +106,37 @@ export const TOOLS_SCHEMA: ChatCompletionTool[] = [
                     query: { type: "string", description: "Search query" },
                 },
                 required: ["query"],
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "perplexity_search",
+            description:
+                "Real-time web search via Perplexity Search API. Prefer this over browser automation for fast current-events lookups.",
+            parameters: {
+                type: "object",
+                properties: {
+                    query: { type: "string", description: "Single search query" },
+                    queries: {
+                        type: "array",
+                        items: { type: "string" },
+                        description: "Optional multi-query search (use instead of query)",
+                    },
+                    max_results: {
+                        type: "number",
+                        description: "Number of results per query (1-20)",
+                    },
+                    max_tokens_per_page: {
+                        type: "number",
+                        description: "Maximum tokens to extract per page",
+                    },
+                    country: {
+                        type: "string",
+                        description: "ISO 3166-1 alpha-2 country code (e.g. US, GB)",
+                    },
+                },
             },
         },
     },
@@ -209,6 +241,16 @@ export const AVAILABLE_TOOLS: Record<string, ToolFn> = {
     screenshot: () => screenshot(),
     get_links: () => getLinks(),
     search_google: (a) => searchGoogle(a as { query: string }),
+    perplexity_search: (a) =>
+        perplexitySearch(
+            a as {
+                query?: string;
+                queries?: string[];
+                max_results?: number;
+                max_tokens_per_page?: number;
+                country?: string;
+            }
+        ),
     get_current_url: () => getCurrentUrl(),
     run_command: (a) => runCommand(a as { command: string }),
     self_update: () => selfUpdate(),
