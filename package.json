@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "dotenv": "^16.4.0",
+    "ethers": "^6.16.0",
     "js-yaml": "^4.1.1",
     "openai": "^4.70.0",
     "p-queue": "^9.1.0",

@@ -9,7 +9,8 @@ import {
     searchGoogle,
     getCurrentUrl,
 } from "./browser.js";
-import { runCommand, selfUpdate } from "./shell.js";
+import { runCommand, selfUpdate, getApprovalInterface } from "./shell.js";
+import { getAddress, getBalance, sendTransaction, callContract } from "./wallet.js";
 
 // ---------------------------------------------------------------------------
 // Schema — exposed to OpenAI function calling
@@ -137,6 +138,61 @@ export const TOOLS_SCHEMA: ChatCompletionTool[] = [
             parameters: { type: "object", properties: {} },
         },
     },
+    {
+        type: "function",
+        function: {
+            name: "wallet_address",
+            description: "Returns the agent's own ETH wallet public address.",
+            parameters: { type: "object", properties: {} },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "wallet_balance",
+            description: "Checks the ETH balance of the agent's wallet. Optionally pass a token contract address to check an ERC-20 token balance.",
+            parameters: {
+                type: "object",
+                properties: {
+                    token: { type: "string", description: "Optional ERC-20 contract address" },
+                },
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "wallet_send",
+            description: "Sends ETH or an ERC-20 token from the agent's wallet. ALWAYS requires explicit owner approval via Telegram.",
+            parameters: {
+                type: "object",
+                properties: {
+                    to: { type: "string", description: "Recipient address (0x...)" },
+                    amount: { type: "string", description: "Amount to send (e.g. '0.01')" },
+                    token: { type: "string", description: "Optional ERC-20 contract address. Omit for native ETH." },
+                },
+                required: ["to", "amount"],
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "wallet_call_contract",
+            description: "Interact with any smart contract. Can read state (view/pure functions) or write (state-changing — requires approval). Provide the ABI fragment, function name, and arguments.",
+            parameters: {
+                type: "object",
+                properties: {
+                    contract_address: { type: "string", description: "The smart contract address" },
+                    abi: { type: "string", description: "JSON ABI fragment (array of function defs)" },
+                    function_name: { type: "string", description: "Function to call" },
+                    args: { type: "array", items: { type: "string" }, description: "Function arguments" },
+                    value: { type: "string", description: "ETH to send (for payable functions)" },
+                },
+                required: ["contract_address", "abi", "function_name"],
+            },
+        },
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -156,4 +212,47 @@ export const AVAILABLE_TOOLS: Record<string, ToolFn> = {
     get_current_url: () => getCurrentUrl(),
     run_command: (a) => runCommand(a as { command: string }),
     self_update: () => selfUpdate(),
+    wallet_address: async () => {
+        const addr = await getAddress();
+        return `Wallet address: ${addr}`;
+    },
+    wallet_balance: async (a) => {
+        const balance = await getBalance((a as { token?: string }).token);
+        return `Balance: ${balance}`;
+    },
+    wallet_send: async (a) => {
+        const { to, amount, token } = a as { to: string; amount: string; token?: string };
+        const desc = token
+            ? `Send ${amount} tokens (${token}) to ${to}`
+            : `Send ${amount} ETH to ${to}`;
+
+        // FORCED approval — always ask, even if Global Allow is on
+        const iface = getApprovalInterface();
+        const approved = await iface.requestApproval(desc);
+        if (!approved) return "Transaction REJECTED by owner.";
+
+        const txHash = await sendTransaction(to, amount, token);
+        return `Transaction sent! TX hash: ${txHash}`;
+    },
+    wallet_call_contract: async (a) => {
+        const { contract_address, abi, function_name, args, value } = a as {
+            contract_address: string; abi: string; function_name: string;
+            args?: string[]; value?: string;
+        };
+
+        // Check if it's a write call by peeking at the ABI
+        const parsedAbi = JSON.parse(abi);
+        const fnDef = parsedAbi.find((f: any) => f.name === function_name);
+        const isWrite = fnDef && fnDef.stateMutability !== "view" && fnDef.stateMutability !== "pure";
+
+        if (isWrite) {
+            const iface = getApprovalInterface();
+            const approved = await iface.requestApproval(
+                `Contract call: ${function_name}() on ${contract_address}${value ? ` (sending ${value} ETH)` : ""}`
+            );
+            if (!approved) return "Contract call REJECTED by owner.";
+        }
+
+        return await callContract(contract_address, abi, function_name, args || [], value);
+    },
 };

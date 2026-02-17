@@ -26,6 +26,10 @@ export function setApprovalInterface(impl: ApprovalInterface) {
     approval = impl;
 }
 
+export function getApprovalInterface(): ApprovalInterface {
+    return approval;
+}
+
 export function setGlobalAllow(enabled: boolean) {
     isGlobalAllowActive = enabled;
     console.log(
