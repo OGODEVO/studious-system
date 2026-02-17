@@ -33,3 +33,7 @@ Oasis is not a chatbot; it is a worker.
 - **Runtime**: Node.js / TypeScript.
 - **Browser**: Playwright (Headless/Headed).
 - **LLM**: Provider-agnostic (OpenAI, Anthropic, Novita, etc.).
+
+
+
+model="moonshotai/kimi-k2.5",

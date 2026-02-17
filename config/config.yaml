@@ -1,5 +1,5 @@
 system:
-  model: "minimax/minimax-m2.5"
+  model: "moonshotai/kimi-k2.5"
   provider: "novita"
   temperature: 0.7
   context_window: 204800       # Total context size of the model

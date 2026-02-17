@@ -228,7 +228,7 @@ async function downloadFile(fileId: string): Promise<{ buffer: Buffer; url: stri
 bot.on(message("photo"), async (ctx) => {
     if (!authCheck(ctx.chat.id.toString())) { ctx.reply("⛔️ Unauthorized."); return; }
 
-    const photo = ctx.message.photo.at(-1); // Largest resolution
+    const photo = ctx.message.photo.at(1) || ctx.message.photo.at(-1); // Use medium size (index 1) to avoid huge payloads, plain fallback to largest
     if (!photo) return;
 
     const caption = ctx.message.caption || "Describe this image.";
@@ -243,15 +243,19 @@ bot.on(message("photo"), async (ctx) => {
             {
                 type: "image_url",
                 image_url: {
-                    url: `data:image/jpeg;base64,${base64}`
+                    url: `data:image/jpeg;base64,${base64}`,
+                    detail: "auto"
                 }
             }
         ];
 
         // Fire-and-forget — don't block Telegraf's middleware
         processAndReply(ctx, visionContent);
-    } catch (err) {
-        ctx.reply(`❌ Image error: ${(err as Error).message}`);
+    } catch (err: any) {
+        console.error("❌ Image Error Details:", err);
+        // Try to get response body if available
+        const details = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+        ctx.reply(`❌ Image error: ${details}`);
     }
 });
 
