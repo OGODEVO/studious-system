@@ -7,7 +7,7 @@
 
 # --- LLM Settings for the Memory Agent ---
 model:
-  name: "gpt-4o-mini"            # any OpenAI v1-compatible model
+  name: "gpt-5-mini"            # any OpenAI v1-compatible model
   base_url: ""                   # leave empty for OpenAI, or set e.g. "https://api.novita.ai/v3/openai"
   api_key: ""                    # leave empty to fall back to OPENAI_API_KEY env var
   temperature: 0.1               # low temp → deterministic, precise memory decisions

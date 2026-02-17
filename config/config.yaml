@@ -3,15 +3,15 @@ system:
   provider: "novita"
   temperature: 0.7
   context_window: 204800       # Total context size of the model
-  max_output_tokens: 131100    # Max tokens to generate per turn
+  max_output_tokens: 130100   # Minimax M2.5 max (131100) minus safety buffer
 
 providers:
   novita:
     base_url: "https://api.novita.ai/openai"
-    api_key: "<Your Novita API Key>"
+    api_key: ""                                  # Set in .env as NOVITA_API_KEY
   openai:
     base_url: "https://api.openai.com/v1"
-    api_key: "<Your OpenAI API Key>"
+    api_key: ""                                  # Set in .env as OPENAI_API_KEY
 
 browser:
   headless: true
@@ -27,7 +27,7 @@ tools:
   search_results: 8
 
 memory:
-  extraction_model: "gpt-4o-mini"             # any OpenAI v1-compatible model
+  extraction_model: "gpt-5-mini"             # any OpenAI v1-compatible model
   extraction_base_url: ""                      # leave empty for OpenAI, or set e.g. "https://api.novita.ai/v3/openai"
   extraction_api_key: ""                       # leave empty to use OPENAI_API_KEY, or set a separate key
   extraction_temperature: 0.1

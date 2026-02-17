@@ -160,7 +160,7 @@ export async function runAgent(
             tools: TOOLS_SCHEMA,
             tool_choice: "auto",
             temperature: config.temperature,
-            max_completion_tokens: config.maxTokens,
+            max_tokens: config.maxTokens,
             stream: true,
         });
 
