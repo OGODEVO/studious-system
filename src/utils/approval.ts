@@ -4,7 +4,7 @@ import * as readline from "readline";
 // Approval Interface (Platform Agnostic)
 // ---------------------------------------------------------------------------
 
-export type ApprovalDecision = "ALLOW" | "DENY" | "ALWAYS_ALLOW_SESSION";
+export type ApprovalDecision = "ALLOW" | "DENY" | "ALLOW_ALL";
 
 export interface ApprovalInterface {
     requestApproval(command: string): Promise<ApprovalDecision>;
@@ -25,7 +25,7 @@ export class CLIApproval implements ApprovalInterface {
             console.log("\n⚠️  Agent requests to execute command:");
             console.log(`   > ${command}`);
             console.log("   [y] Allow once");
-            console.log("   [a] Allow always for this session (careful!)");
+            console.log("   [a] Allow ALL commands until revoked (careful!)");
             console.log("   [n] Deny");
 
             rl.question("   Decision (y/a/n): ", (answer) => {
@@ -35,7 +35,7 @@ export class CLIApproval implements ApprovalInterface {
                 if (normalized === "y" || normalized === "yes") {
                     resolve("ALLOW");
                 } else if (normalized === "a" || normalized === "always") {
-                    resolve("ALWAYS_ALLOW_SESSION");
+                    resolve("ALLOW_ALL");
                 } else {
                     resolve("DENY");
                 }

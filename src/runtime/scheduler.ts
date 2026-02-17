@@ -1,8 +1,8 @@
 import { submitTask, type LaneName } from "./taskQueue.js";
-import { useStore } from "../ui/store.js";
 import { config } from "../utils/config.js";
 import { ResilientExecutor } from "./resilience.js";
 import { loadSchedulerState, saveSchedulerState } from "./schedulerState.js";
+import type { Message } from "../agent.js";
 
 interface RuntimeReminder {
     id: string;
@@ -39,6 +39,25 @@ const runtimeHeartbeat = {
     prompt: config.scheduler.heartbeat.prompt,
 };
 
+// ---------------------------------------------------------------------------
+// Conversation history (decoupled from any UI store)
+// ---------------------------------------------------------------------------
+
+const conversationHistory: Message[] = [];
+
+export function getSchedulerHistory(): Message[] {
+    return conversationHistory;
+}
+
+export function pushSchedulerHistory(msg: Message): void {
+    conversationHistory.push(msg);
+    if (conversationHistory.length > 50) {
+        conversationHistory.shift();
+    }
+}
+
+// ---------------------------------------------------------------------------
+
 function nowMs(): number {
     return Date.now();
 }
@@ -71,10 +90,10 @@ function normalizeReminders(): RuntimeReminder[] {
     return configured;
 }
 
-function getApiHistory() {
-    return useStore
-        .getState()
-        .history.filter((m) => m.role === "user" || m.role === "assistant");
+function getApiHistory(): Message[] {
+    return conversationHistory.filter(
+        (m) => m.role === "user" || m.role === "assistant"
+    );
 }
 
 function persistState(): void {
@@ -115,11 +134,7 @@ async function runReminder(reminder: RuntimeReminder): Promise<void> {
     if (running.has(reminder.id)) return;
 
     running.add(reminder.id);
-    const store = useStore.getState();
-    store.addMessage({
-        role: "system",
-        content: `[SCHED] Running reminder \"${reminder.id}\" on ${reminder.lane} lane`,
-    });
+    console.log(`[SCHED] Running reminder "${reminder.id}" on ${reminder.lane} lane`);
 
     try {
         const result = await reminderExecutor.execute(
@@ -137,15 +152,10 @@ async function runReminder(reminder: RuntimeReminder): Promise<void> {
             }
         );
 
-        useStore.getState().addMessage({
-            role: "assistant",
-            content: `[${reminder.id}] ${result.reply}`,
-        });
+        console.log(`[${reminder.id}] ${result.reply}`);
+        pushSchedulerHistory({ role: "assistant", content: result.reply });
     } catch (err) {
-        useStore.getState().addMessage({
-            role: "system",
-            content: `[SCHED][ERROR] ${reminder.id}: ${(err as Error).message}`,
-        });
+        console.error(`[SCHED][ERROR] ${reminder.id}: ${(err as Error).message}`);
     } finally {
         running.delete(reminder.id);
     }
@@ -179,10 +189,7 @@ export function startScheduler(): void {
     if (!config.scheduler.enabled || tickTimer) return;
     loadPersistedState();
 
-    useStore.getState().addMessage({
-        role: "system",
-        content: `[SCHED] Scheduler active (${config.scheduler.tickSeconds}s tick)`,
-    });
+    console.log(`[SCHED] Scheduler active (${config.scheduler.tickSeconds}s tick)`);
 
     tickTimer = setInterval(() => {
         void tick();
@@ -196,10 +203,7 @@ export function stopScheduler(): void {
         clearInterval(tickTimer);
         tickTimer = null;
         persistState();
-        useStore.getState().addMessage({
-            role: "system",
-            content: "[SCHED] Scheduler stopped",
-        });
+        console.log("[SCHED] Scheduler stopped");
     }
 }
 
@@ -215,22 +219,17 @@ export function setHeartbeat(intervalMinutes: number, prompt?: string): void {
 
     nextRunById.delete(HEARTBEAT_ID);
     persistState();
-    useStore.getState().addMessage({
-        role: "system",
-        content:
-            `[SCHED] Heartbeat set to every ${runtimeHeartbeat.intervalMinutes} minute(s)` +
-            (prompt ? " with custom prompt" : ""),
-    });
+    console.log(
+        `[SCHED] Heartbeat set to every ${runtimeHeartbeat.intervalMinutes} minute(s)` +
+        (prompt ? " with custom prompt" : "")
+    );
 }
 
 export function disableHeartbeat(): void {
     runtimeHeartbeat.enabled = false;
     nextRunById.delete(HEARTBEAT_ID);
     persistState();
-    useStore.getState().addMessage({
-        role: "system",
-        content: "[SCHED] Heartbeat disabled",
-    });
+    console.log("[SCHED] Heartbeat disabled");
 }
 
 export function getHeartbeatStatus(): {

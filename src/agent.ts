@@ -5,6 +5,7 @@ import type {
 } from "openai/resources/chat/completions";
 import { config } from "./utils/config.js";
 import { TOOLS_SCHEMA, AVAILABLE_TOOLS } from "./tools/registry.js";
+import { agentBus } from "./utils/events.js";
 import {
     loadBootstrapContext,
     flushBeforeCompaction,
@@ -18,18 +19,26 @@ import {
 } from "./skills/registry.js";
 import { ResilientExecutor } from "./runtime/resilience.js";
 
-const BASE_SYSTEM_PROMPT = `You are Oasis, a capable browser-automation agent.
-You can browse the web, interact with pages, extract information, and search Google.
+const BASE_SYSTEM_PROMPT = `You are Oasis — an autonomous AI agent.
+You operate independently: you send your own heartbeats, run scheduled tasks, and manage your own lifecycle.
+Your owner communicates with you over Telegram. You are always-on and self-sufficient.
+
+You have several tools at your disposal:
+- A web browser (navigate, click, type, extract text, screenshot, search Google)
+- A shell (run commands — git, npm, scripts, etc.)
+- Scheduled reminders and a heartbeat system
 
 Guidelines:
-- Use tools to gather real data before answering. Do NOT guess or hallucinate content.
-- When navigating, always use full URLs (https://).
-- Use extract_text after navigating to read page content.
+- Act autonomously. Use your tools to gather real data — never guess or hallucinate.
+- Learn your user. Pay attention to their habits, preferences, interests, and schedule. Adapt to their rhythm.
+- Be in sync. You and your user are a team — anticipate their needs, remember what matters to them, and align with their goals.
+- When browsing, always use full URLs (https://) and extract_text after navigating.
 - Use search_google when you need to find something and don't have a direct URL.
-- Use run_command to execute shell commands (e.g., git, npm). This requires user approval.
-- Be concise in your final answers. Summarize what you found clearly.
+- Shell commands (run_command) may require user approval depending on the current permission mode.
+- Be concise. Summarize findings clearly.
 - If a tool call fails, try an alternative approach before giving up.
-- Reference any user preferences or known facts from your memory when relevant.`;
+- Reference any user preferences or known facts from your memory when relevant.
+- You are not just a chatbot — you are an agent. Take initiative when appropriate.`;
 
 const client = new OpenAI({
     apiKey: config.openaiKey,
@@ -99,10 +108,14 @@ async function executeToolCalls(
     for (const tc of toolCalls) {
         const fn = AVAILABLE_TOOLS[tc.function.name];
         let output: string;
+        let args: Record<string, unknown> = {};
+        try { args = JSON.parse(tc.function.arguments); } catch { /* empty args */ }
+
+        agentBus.emitToolStart(tc.function.name, args);
+        const t0 = Date.now();
 
         if (fn) {
             try {
-                const args = JSON.parse(tc.function.arguments);
                 output = await fn(args);
             } catch (err) {
                 output = "Error executing " + tc.function.name + ": " + (err as Error).message;
@@ -111,6 +124,7 @@ async function executeToolCalls(
             output = "Unknown tool: " + tc.function.name;
         }
 
+        agentBus.emitToolEnd(tc.function.name, Date.now() - t0, !output.startsWith("Error"));
         console.log("   Tool: " + tc.function.name + " -> " + output.slice(0, 80) + "...");
 
         results.push({

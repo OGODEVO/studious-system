@@ -8,36 +8,35 @@ const execAsync = promisify(exec);
 // Configuration
 // ---------------------------------------------------------------------------
 
-// Commands that are allowed by default (still subject to approval if not session-whitelisted)
-const ALLOWED_BINARIES = [
-    "git",
-    "npm",
-    "node",
-    "ls",
-    "grep",
-    "cat",
-    "find",
-    "pwd",
-    "echo",
-    "mkdir",
-    "touch",
-];
-
-// Commands that are strictly blocked
 const BLOCKED_BINARIES = [
-    // "rm", // Temporarily allowed but dangerous
     "sudo", // Still blocked - agent should not need root
-    // "chmod",
-    // "chown",
 ];
 
 const MAX_OUTPUT_LENGTH = 3000;
 
-// Internal session cache for "always allow"
-const sessionAllowList = new Set<string>();
+// ---------------------------------------------------------------------------
+// Approval State
+// ---------------------------------------------------------------------------
 
-// Default approval interface (can be swapped)
-const approval: ApprovalInterface = new CLIApproval();
+let approval: ApprovalInterface = new CLIApproval();
+let isGlobalAllowActive = false;
+
+export function setApprovalInterface(impl: ApprovalInterface) {
+    approval = impl;
+}
+
+export function setGlobalAllow(enabled: boolean) {
+    isGlobalAllowActive = enabled;
+    console.log(
+        enabled
+            ? "🔓 Global execution permission GRANTED. Agent can run commands without further approval."
+            : "🔒 Global execution permission REVOKED."
+    );
+}
+
+export function getGlobalAllowStatus(): boolean {
+    return isGlobalAllowActive;
+}
 
 // ---------------------------------------------------------------------------
 // Implementation
@@ -57,29 +56,22 @@ export async function runCommand(args: { command: string }): Promise<string> {
         return `Error: Command '${binary}' is blocked for security reasons.`;
     }
 
-    // High-risk commands get an extra warning log, but are allowed if approved
+    // High-risk commands get an extra warning log
     const HIGH_RISK = ["rm", "curl", "wget", "mv", "chmod", "chown"];
     if (HIGH_RISK.includes(binary)) {
         console.warn(`⚠️  HIGH RISK COMMAND: '${binary}'. Requires careful review.`);
     }
 
-    // Optional: Check against allowed list, or just rely on approval
-    // meaningful restriction: only allow standard tools
-    if (!ALLOWED_BINARIES.includes(binary) && !cmd.startsWith("./")) {
-        // Relaxed for now, but logged
-        console.warn(`⚠️  Warning: '${binary}' is not in the standard allow-list, but proceeding to approval.`);
-    }
-
     // 2. Approval Flow
-    if (!sessionAllowList.has(cmd)) {
+    if (!isGlobalAllowActive) {
         const decision = await approval.requestApproval(cmd);
 
         if (decision === "DENY") {
             return "Error: User denied execution of this command.";
         }
 
-        if (decision === "ALWAYS_ALLOW_SESSION") {
-            sessionAllowList.add(cmd);
+        if (decision === "ALLOW_ALL") {
+            setGlobalAllow(true);
         }
     }
 

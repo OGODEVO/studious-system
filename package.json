@@ -4,36 +4,22 @@
   "description": "General-purpose browser automation agent powered by Playwright + OpenAI",
   "type": "module",
   "scripts": {
-    "start": "tsx src/index.tsx",
-    "dev": "tsx watch src/index.tsx",
-    "gui": "tsx src/server/start-gui.ts",
-    "build": "tsc",
-    "postinstall": "playwright install chromium",
-    "web": "tsx src/web/server.ts"
+    "start": "tsx src/telegram/bot.ts",
+    "dev": "tsx watch src/telegram/bot.ts",
+    "build": "tsc"
   },
   "dependencies": {
-    "@types/react": "^19.2.14",
     "dotenv": "^16.4.0",
-    "express": "^5.2.1",
-    "ink": "^6.7.0",
-    "ink-big-text": "^2.0.0",
-    "ink-box": "^1.0.0",
-    "ink-spinner": "^5.0.0",
-    "ink-text-input": "^6.0.0",
     "js-yaml": "^4.1.1",
     "openai": "^4.70.0",
     "p-queue": "^9.1.0",
     "playwright": "^1.49.0",
-    "react": "^19.2.4",
-    "tiktoken": "^1.0.22",
-    "ws": "^8.19.0",
-    "zustand": "^5.0.11"
+    "telegraf": "^4.16.3",
+    "tiktoken": "^1.0.22"
   },
   "devDependencies": {
-    "@types/express": "^5.0.6",
     "@types/js-yaml": "^4.0.9",
-    "@types/node": "^22.0.0",
-    "@types/ws": "^8.18.1",
+    "@types/node": "^22.19.11",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }
