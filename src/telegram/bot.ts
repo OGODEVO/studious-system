@@ -10,6 +10,7 @@ import { ApprovalInterface, ApprovalDecision } from "../utils/approval.js";
 import { agentBus, type ToolStartEvent, type ToolEndEvent } from "../utils/events.js";
 import { runAgent, type Message } from "../agent.js";
 import { setApprovalInterface, setGlobalAllow, getGlobalAllowStatus } from "../tools/shell.js";
+import { getAddress, getBalance } from "../tools/wallet.js";
 import { startScheduler, stopScheduler, pushSchedulerHistory } from "../runtime/scheduler.js";
 import { history, saveSession, loadSession, startAutosave, stopAutosave } from "../utils/context.js";
 import type { ChatCompletionContentPart } from "openai/resources/chat/completions";
@@ -126,6 +127,9 @@ bot.command("start", (ctx) => {
         "Send me text, photos, or documents\\.\n\n" +
         "*Commands:*\n" +
         "/status \\- Check permission status\n" +
+        "/wallet \\- Show agent wallet address\n" +
+        "/balance \\- Show ETH balance\n" +
+        "/balance <token_address> \\- Show ERC\\-20 balance\n" +
         "/revoke \\- Revoke 'Allow All' permission\n" +
         "/update \\- Pull latest code \\& restart\n" +
         "/save \\- Save chat history to disk\n" +
@@ -144,6 +148,28 @@ bot.command("status", (ctx) => {
     ctx.reply(isFree
         ? "🔓 Status: UNLOCKED (All commands allowed)"
         : "🔒 Status: SECURE (Approval required)");
+});
+
+bot.command("wallet", async (ctx) => {
+    if (!authCheck(ctx.chat.id.toString())) { ctx.reply("⛔️ Unauthorized."); return; }
+    try {
+        const address = await getAddress();
+        await ctx.reply(`👛 Wallet address: ${address}`);
+    } catch (err) {
+        await ctx.reply(`❌ Wallet error: ${(err as Error).message}`);
+    }
+});
+
+bot.command("balance", async (ctx) => {
+    if (!authCheck(ctx.chat.id.toString())) { ctx.reply("⛔️ Unauthorized."); return; }
+    try {
+        const text = ctx.message.text || "";
+        const token = text.split(" ").slice(1).join(" ").trim() || undefined;
+        const balance = await getBalance(token);
+        await ctx.reply(token ? `💰 Token balance: ${balance}` : `💰 ETH balance: ${balance}`);
+    } catch (err) {
+        await ctx.reply(`❌ Balance error: ${(err as Error).message}`);
+    }
 });
 
 bot.command("update", async (ctx) => {

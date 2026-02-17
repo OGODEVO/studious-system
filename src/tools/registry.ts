@@ -12,6 +12,7 @@ import {
 import { perplexitySearch } from "./perplexity.js";
 import { runCommand, selfUpdate, getApprovalInterface } from "./shell.js";
 import { getAddress, getBalance, sendTransaction, callContract } from "./wallet.js";
+import { getHeartbeatStatus, setHeartbeat, disableHeartbeat } from "../runtime/scheduler.js";
 
 // ---------------------------------------------------------------------------
 // Schema — exposed to OpenAI function calling
@@ -182,6 +183,37 @@ export const TOOLS_SCHEMA: ChatCompletionTool[] = [
     {
         type: "function",
         function: {
+            name: "heartbeat_status",
+            description: "Get current heartbeat scheduler status (enabled, interval, prompt).",
+            parameters: { type: "object", properties: {} },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "heartbeat_set",
+            description: "Enable/update heartbeat interval (minutes) and optional prompt.",
+            parameters: {
+                type: "object",
+                properties: {
+                    interval_minutes: { type: "number", description: "Heartbeat interval in minutes (>=1)" },
+                    prompt: { type: "string", description: "Optional custom heartbeat prompt" },
+                },
+                required: ["interval_minutes"],
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "heartbeat_disable",
+            description: "Disable heartbeat scheduler.",
+            parameters: { type: "object", properties: {} },
+        },
+    },
+    {
+        type: "function",
+        function: {
             name: "wallet_address",
             description: "Returns the agent's own ETH wallet public address. MUST be called whenever the user asks for wallet address; do not infer or reuse stale values.",
             parameters: { type: "object", properties: {} },
@@ -271,6 +303,23 @@ export const AVAILABLE_TOOLS: Record<string, ToolFn> = {
                 install?: boolean;
             }
         ),
+    heartbeat_status: async () => {
+        const hb = getHeartbeatStatus();
+        return `Heartbeat: ${hb.enabled ? "ON" : "OFF"} | interval: ${hb.intervalMinutes} minute(s) | prompt: ${hb.prompt}`;
+    },
+    heartbeat_set: async (a) => {
+        const { interval_minutes, prompt } = a as { interval_minutes: number; prompt?: string };
+        if (!Number.isFinite(interval_minutes) || interval_minutes < 1) {
+            return "Error: interval_minutes must be a number >= 1.";
+        }
+        setHeartbeat(interval_minutes, prompt);
+        const hb = getHeartbeatStatus();
+        return `Heartbeat updated: ON every ${hb.intervalMinutes} minute(s).`;
+    },
+    heartbeat_disable: async () => {
+        disableHeartbeat();
+        return "Heartbeat disabled.";
+    },
     wallet_address: async () => {
         const addr = await getAddress();
         return `Wallet address: ${addr}`;

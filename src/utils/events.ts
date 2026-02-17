@@ -29,6 +29,9 @@ const TOOL_LABELS: Record<string, (args: Record<string, unknown>) => string> = {
     search_google: (a) => `🔍 Searching: "${a.query}"…`,
     get_current_url: () => `📍 Getting current URL…`,
     run_command: (a) => `⚡ Running: \`${(a.command as string || "").slice(0, 60)}\`…`,
+    heartbeat_status: () => `💓 Checking heartbeat status…`,
+    heartbeat_set: (a) => `💓 Setting heartbeat to ${(a.interval_minutes as number) || "?"} minute(s)…`,
+    heartbeat_disable: () => `💓 Disabling heartbeat…`,
 };
 
 export function getToolLabel(tool: string, args: Record<string, unknown>): string {

@@ -64,6 +64,11 @@ Runtime commands:
 - `/heartbeat off` (disable)
 - `/grade` (resilience scorecard)
 
+Agent heartbeat tools (LLM-callable):
+- `heartbeat_status`
+- `heartbeat_set(interval_minutes, prompt?)`
+- `heartbeat_disable`
+
 Update behavior:
 - `self_update` supports `remote`, `branch`, optional `ref`, and `install`.
 - Default update target is latest pushed commit on `origin/<current-branch>` via fast-forward only.
