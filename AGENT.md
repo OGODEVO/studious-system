@@ -1,59 +1,61 @@
-# Oasis Agent Standard
+# Oasis Agent (v2.1)
 
-**Identity**: Oasis is a reactive, autonomous agent capable of long-running tasks, self-correction, and context-aware execution.
+**Identity**: Oasis is a reactive, autonomous agent capable of long-running tasks, self-correction, and context-aware execution. It runs on its own dedicated server and communicates via Telegram.
 
-## Core Design Principles
+## Core Capabilities
 
-### 1. Omni-Interface Architecture
-The agent core must be **interface-agnostic**. The logic loop runs independently of how the user interacts with it.
-- **CLI**: For development and local debugging.
-- **Web UI**: For rich interaction and dashboarding.
-- **Web UI**: For rich interaction and dashboarding.
-*Implementation*: All user interactions (approval, input, feedback) must go through abstract interfaces (e.g., `ApprovalInterface`), never direct `console.log` or DOM manipulation.
+### 🌐 Autonomous Browsing
+- Navigate, click, type, and extract text from any website.
+- Take screenshots and search Google.
+- **Vision**: Uses `minimax-m2.5` (or configured VLM) to "see" and understand web pages.
 
-### 2. Autonomous & Reactive
-Oasis is not a chatbot; it is a worker.
-- **Loop**: It runs in a continuous loop, sensing the environment and acting.
-- **Resilience**: It must handle errors, retry strategies, and self-heal without crashing.
-- **Cron/Schdeduling**: It supports scheduled tasks (e.g., "Check this site every 5 minutes").
+### 🐚 Shell & Filesystem
+- Full access to the local filesystem and terminal.
+- Can run git, npm, python scripts, and manage its own process.
+- **Self-Update**: Can pull the latest code from GitHub and restart itself via `/update`.
 
-### 3. Infinite Context & Memory
-- **Token-Based Compaction**: Triggered dynamically when context usage hits 90% of model window.
-- **Carry-Over Summarization**: Before flushing old messages, we generate a `session_context.md` summary which is permanently injected into the prompt.
-- **Layered Memory**:
-    - **Semantic**: Facts & Preferences (`memory.md`).
-    - **Episodic**: Recent experiences (`episodic/*.md`).
-    - **Procedural**: Learned rules (`rules.md`).
+### 📷 Native Vision & Documents
+- **Images**: Send photos directly in Telegram. Oasis analyzes them using native multimodal LLM capabilities.
+- **Docs**: Upload PDF, DOCX, or TXT files. Oasis reads them using `docling` and `pdf-parse`.
 
-### 4. Security & Trust
-- **Trust but Verify**: The agent is powerful but gated.
-- **Human-in-the-Loop**: High-stakes actions (shell commands, money, external comms) require explicit approval via the configured interface.
-
-## Tech Stack Standards
-- **Runtime**: Node.js / TypeScript.
-- **Browser**: Playwright (Headless/Headed).
-- **LLM**: Provider-agnostic (OpenAI, Anthropic, Novita, etc.).
-
-
-
-model="moonshotai/kimi-k2.5",
-
-Hey! 👋 I'm here! Sorry for the delay — looks like there was a hiccup with the image earlier. I can see it now though!
-
-## Image Description
-
-This is a **3D rendered character** of an elderly man with a whimsical, cartoony style:
-
-| Feature | Description |
-|---------|-------------|
-| **Hat** | Orange/red knit beanie |
-| **Hair** | Long, wild white/grey hair sticking out |
-| **Face** | Large expressive blue eyes behind round glasses, prominent pink nose, bushy white mustache and long beard |
-| **Clothing** | Red quilted jacket with blue collar |
-| **Style** | Pixar/DreamWorks-style CGI — very detailed textures and warm lighting |
-
-He has a surprised or curious expression. The rendering quality is excellent — looks like professional character work, possibly from an animated film or game.
+### 🔐 ETH Wallet (Base)
+Oasis has its own EVM wallet (private key in `.env`).
+- **Address**: `0xDBE72487AaEA26891a7FCCc45cdBa857476021cC` (Base Mainnet)
+- **Check Balance**: "Check my ETH/USDC balance".
+- **Send Crypto**: "Send 0.01 ETH to..." (Always requires Telegram approval).
+- **Smart Contracts**: Can read/write to any contract. "Swap 10 USDC for ETH on Uniswap" (Write calls require approval).
 
 ---
 
-What's up? Need anything else? 😊
+## Telegram Commands
+
+| Command | Description |
+|---|---|
+| `/start` | Wake up the bot and see available commands. |
+| `/status` | Check current permission mode (Allow All vs Ask). |
+| `/revoke` | Revoke "Allow All" mode (returns to "Assist" mode). |
+| `/save` | Manually save chat history to disk immediately. |
+| `/reset` | Clear chat history and delete the session file (fresh start). |
+| `/update` | Pull latest code from git, install deps, and restart. |
+
+---
+
+## Technical Architecture
+
+### 1. Omni-Interface
+The agent loop (`agent.ts`) is decoupled from the interface. Currently uses **Telegram** (`src/telegram/bot.ts`) as the primary UI, but supports CLI (`src/cli.ts`) for debugging.
+
+### 2. Persistence & Memory
+- **Session**: Chat history is auto-saved every 5 minutes to `memory/chat_session.json` (atomic writes).
+- **Semantic**: Facts stored in `memory/memory.md`.
+- **Procedural**: Rules stored in `memory/rules.md`.
+
+### 3. Security
+- **Human-in-the-Loop**: High-stakes tools (shell, wallet sends) trigger an approval flow.
+- **Global Allow**: Can be enabled via `setGlobalAllow(true)` shell tool, but **Wallet Send** and **Contract Writes** ALWAYS require explicit approval regardless of this setting.
+
+### 4. Deployment
+Managed via **PM2**.
+- **Logs**: `pm2 logs oasis`
+- **Restart**: `pm2 restart oasis`
+- **Config**: `config/config.yaml` and `.env` (API keys).
