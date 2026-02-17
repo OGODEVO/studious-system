@@ -29,8 +29,17 @@ export async function closeBrowser(): Promise<void> {
 }
 
 function getPage(): Page {
-    if (!page) throw new Error("Browser not launched — call launchBrowser() first.");
+    if (!page) throw new Error("Browser not initialized. Call ensureBrowser() first.");
     return page;
+}
+
+/**
+ * Lazy browser initialization — called automatically by browser tools.
+ * Safe to call multiple times; only launches once.
+ */
+export async function ensureBrowser(): Promise<void> {
+    if (browser && page) return;
+    await launchBrowser();
 }
 
 // ---------------------------------------------------------------------------
@@ -38,6 +47,7 @@ function getPage(): Page {
 // ---------------------------------------------------------------------------
 
 export async function navigate(args: { url: string }): Promise<string> {
+    await ensureBrowser();
     const p = getPage();
     try {
         await p.goto(args.url, { waitUntil: "domcontentloaded", timeout: config.timeout });
@@ -53,6 +63,7 @@ export async function navigate(args: { url: string }): Promise<string> {
 }
 
 export async function click(args: { selector: string }): Promise<string> {
+    await ensureBrowser();
     const p = getPage();
     try {
         await p.click(args.selector, { timeout: 5_000 });
@@ -68,6 +79,7 @@ export async function typeText(args: {
     text: string;
     submit?: boolean;
 }): Promise<string> {
+    await ensureBrowser();
     const p = getPage();
     try {
         await p.fill(args.selector, args.text, { timeout: 5_000 });
@@ -82,6 +94,7 @@ export async function typeText(args: {
 }
 
 export async function extractText(args: { selector?: string }): Promise<string> {
+    await ensureBrowser();
     const p = getPage();
     const maxChars = config.extractMaxChars;
     try {
@@ -95,6 +108,7 @@ export async function extractText(args: { selector?: string }): Promise<string> 
 }
 
 export async function screenshot(): Promise<string> {
+    await ensureBrowser();
     const p = getPage();
     const dir = path.resolve("screenshots");
     fs.mkdirSync(dir, { recursive: true });
@@ -105,6 +119,7 @@ export async function screenshot(): Promise<string> {
 }
 
 export async function getLinks(): Promise<string> {
+    await ensureBrowser();
     const p = getPage();
     const maxLinks = config.maxLinks;
     const links = await p.evaluate((limit: number) => {
@@ -121,6 +136,7 @@ export async function getLinks(): Promise<string> {
 }
 
 export async function searchGoogle(args: { query: string }): Promise<string> {
+    await ensureBrowser();
     const p = getPage();
     const url = `https://www.google.com/search?q=${encodeURIComponent(args.query)}`;
     try {
@@ -154,6 +170,7 @@ export async function searchGoogle(args: { query: string }): Promise<string> {
 }
 
 export async function getCurrentUrl(): Promise<string> {
+    await ensureBrowser();
     const p = getPage();
     return `Current URL: ${p.url()}\nTitle: ${await p.title()}`;
 }

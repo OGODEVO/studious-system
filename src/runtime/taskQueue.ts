@@ -68,13 +68,16 @@ export async function submitTask(
             activeTasks.delete(taskId);
             return taskResult;
         } catch (err) {
+            const errMsg = (err as any).status
+                ? `API ${(err as any).status}: ${JSON.stringify((err as any).error || (err as Error).message)}`
+                : (err as Error).message;
             const taskResult: TaskResult = {
                 id: taskId,
                 lane,
                 reply: "",
                 history,
                 status: "failed",
-                error: (err as Error).message,
+                error: errMsg,
                 startedAt,
                 completedAt: Date.now(),
             };
