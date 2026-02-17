@@ -59,6 +59,44 @@ export async function getNetworkStatus(): Promise<string> {
     return `chainId=${network.chainId.toString()} block=${latest} rpc=${RPC_URL}`;
 }
 
+export async function getTransactionStatus(txHash: string): Promise<string> {
+    ensureWallet();
+    const hash = txHash.trim();
+    if (!/^0x([A-Fa-f0-9]{64})$/.test(hash)) {
+        throw new Error("Invalid transaction hash format.");
+    }
+
+    const [network, tx, receipt] = await Promise.all([
+        provider.getNetwork(),
+        provider.getTransaction(hash),
+        provider.getTransactionReceipt(hash),
+    ]);
+
+    if (!tx) {
+        return `Not found on configured RPC. chainId=${network.chainId.toString()} rpc=${RPC_URL}`;
+    }
+
+    const valueEth = ethers.formatEther(tx.value);
+    const status =
+        receipt?.status === 1
+            ? "success"
+            : receipt?.status === 0
+                ? "failed"
+                : "pending";
+    const block = tx.blockNumber ?? receipt?.blockNumber ?? "pending";
+
+    return [
+        `hash=${hash}`,
+        `chainId=${network.chainId.toString()}`,
+        `rpc=${RPC_URL}`,
+        `status=${status}`,
+        `from=${tx.from}`,
+        `to=${tx.to || "(contract creation)"}`,
+        `value=${valueEth} ETH`,
+        `block=${block}`,
+    ].join("\n");
+}
+
 /** Send ETH or ERC-20 token. Returns tx hash. */
 export async function sendTransaction(
     to: string,
