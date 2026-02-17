@@ -260,6 +260,7 @@ bot.command("reset", (ctx) => {
 
 let isProcessing = false;
 let planningMode: PlanningMode = "auto";
+let pendingSendAddress: string | null = null;
 
 function authCheck(chatId: string): boolean {
     return !ALLOWED_CHAT_ID || chatId === ALLOWED_CHAT_ID;
@@ -288,6 +289,37 @@ function parseSendIntent(text: string): { to: string; amount?: string } | null {
         to: addressMatch[0],
         amount: amountMatch?.[1],
     };
+}
+
+function parseAmountFollowUp(text: string): { mode: "max" } | { mode: "amount"; amount: string } | null {
+    const normalized = text.trim().toLowerCase();
+    const canonical = normalized.replace(/[^\w.\s]/g, " ").replace(/\s+/g, " ").trim();
+
+    if (canonical === "max" || canonical === "all" || canonical === "maximum") {
+        return { mode: "max" };
+    }
+
+    const amountOnly = canonical.match(/^(\d+(?:\.\d+)?)(?:\s*eth)?$/i);
+    if (amountOnly) {
+        return { mode: "amount", amount: amountOnly[1] };
+    }
+
+    return null;
+}
+
+async function resolveMaxSendAmountEth(): Promise<string> {
+    const reserve = Number(process.env.OASIS_MAX_SEND_GAS_RESERVE_ETH || "0.00015");
+    const balanceText = await getBalance();
+    const match = balanceText.match(/^([0-9]+(?:\.[0-9]+)?)/);
+    if (!match) throw new Error(`Unable to parse ETH balance from: ${balanceText}`);
+
+    const balance = Number(match[1]);
+    if (!Number.isFinite(balance) || balance <= reserve) {
+        throw new Error(`Insufficient ETH for max send after reserving gas (${reserve} ETH). Balance: ${balance} ETH`);
+    }
+
+    const sendable = balance - reserve;
+    return sendable.toFixed(18).replace(/\.?0+$/, "");
 }
 
 async function performSendEth(ctx: any, to: string, amount: string): Promise<void> {
@@ -370,11 +402,31 @@ async function routeDeterministicIntent(ctx: any, userContent: string | ChatComp
     const sendIntent = parseSendIntent(rawText);
     if (sendIntent) {
         if (!sendIntent.amount) {
+            pendingSendAddress = sendIntent.to;
             await ctx.reply(`Specify amount too. Example: send 0.005 ETH ${sendIntent.to}`);
             return true;
         }
+        pendingSendAddress = null;
         await performSendEth(ctx, sendIntent.to, sendIntent.amount);
         return true;
+    }
+
+    if (pendingSendAddress) {
+        const followUp = parseAmountFollowUp(rawText);
+        if (followUp) {
+            try {
+                const amount =
+                    followUp.mode === "max"
+                        ? await resolveMaxSendAmountEth()
+                        : followUp.amount;
+                const target = pendingSendAddress;
+                pendingSendAddress = null;
+                await performSendEth(ctx, target, amount);
+            } catch (err) {
+                await ctx.reply(`❌ Send error: ${(err as Error).message}`);
+            }
+            return true;
+        }
     }
 
     return false;
