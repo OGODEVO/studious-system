@@ -74,6 +74,8 @@ Canonical path:
 
 The agent prompt/tool schema is configured to force wallet tool calls for wallet-specific questions.
 
+Telegram runtime also emits explicit `wallet_*` tool completion traces (with output preview) so you can verify executed tool results separately from assistant prose.
+
 ## Config Notes
 
 Perplexity defaults are in `config/config.yaml`:

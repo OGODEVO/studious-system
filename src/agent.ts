@@ -135,7 +135,12 @@ async function executeToolCalls(
             output = "Unknown tool: " + tc.function.name;
         }
 
-        agentBus.emitToolEnd(tc.function.name, Date.now() - t0, !output.startsWith("Error"));
+        agentBus.emitToolEnd(
+            tc.function.name,
+            Date.now() - t0,
+            !output.startsWith("Error"),
+            output.slice(0, 240)
+        );
         console.log("   Tool: " + tc.function.name + " -> " + output.slice(0, 80) + "...");
 
         results.push({

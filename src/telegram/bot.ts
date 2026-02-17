@@ -7,7 +7,7 @@ import * as path from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { ApprovalInterface, ApprovalDecision } from "../utils/approval.js";
-import { agentBus, type ToolStartEvent } from "../utils/events.js";
+import { agentBus, type ToolStartEvent, type ToolEndEvent } from "../utils/events.js";
 import { runAgent, type Message } from "../agent.js";
 import { setApprovalInterface, setGlobalAllow, getGlobalAllowStatus } from "../tools/shell.js";
 import { startScheduler, stopScheduler, pushSchedulerHistory } from "../runtime/scheduler.js";
@@ -375,6 +375,15 @@ async function main() {
         agentBus.on("tool:start", (evt: ToolStartEvent) => {
             bot.telegram.sendMessage(chatId, evt.label, { parse_mode: "HTML" }).catch(() => { });
             bot.telegram.sendChatAction(chatId, "typing").catch(() => { });
+        });
+        agentBus.on("tool:end", (evt: ToolEndEvent) => {
+            // High-trust trace for wallet tools so outputs are verifiable in chat.
+            if (!evt.tool.startsWith("wallet_")) return;
+            const state = evt.success ? "✅" : "❌";
+            const preview = evt.outputPreview ? `\n${evt.outputPreview}` : "";
+            bot.telegram
+                .sendMessage(chatId, `${state} ${evt.tool} finished in ${evt.durationMs}ms${preview}`)
+                .catch(() => { });
         });
     }
 

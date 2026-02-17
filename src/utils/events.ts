@@ -16,6 +16,7 @@ export interface ToolEndEvent {
     tool: string;
     durationMs: number;
     success: boolean;
+    outputPreview?: string;
 }
 
 const TOOL_LABELS: Record<string, (args: Record<string, unknown>) => string> = {
@@ -41,8 +42,8 @@ class AgentEventBus extends EventEmitter {
         this.emit("tool:start", { tool, args, label } satisfies ToolStartEvent);
     }
 
-    emitToolEnd(tool: string, durationMs: number, success: boolean) {
-        this.emit("tool:end", { tool, durationMs, success } satisfies ToolEndEvent);
+    emitToolEnd(tool: string, durationMs: number, success: boolean, outputPreview?: string) {
+        this.emit("tool:end", { tool, durationMs, success, outputPreview } satisfies ToolEndEvent);
     }
 
     emitStatus(status: "thinking" | "streaming" | "idle") {
