@@ -48,7 +48,15 @@ export async function getBalance(tokenAddress?: string): Promise<string> {
     }
 
     const balance = await provider.getBalance(w.address);
-    return `${ethers.formatEther(balance)} ETH`;
+    const network = await provider.getNetwork();
+    return `${ethers.formatEther(balance)} ETH (chainId=${network.chainId.toString()}, rpc=${RPC_URL})`;
+}
+
+export async function getNetworkStatus(): Promise<string> {
+    ensureWallet();
+    const network = await provider.getNetwork();
+    const latest = await provider.getBlockNumber();
+    return `chainId=${network.chainId.toString()} block=${latest} rpc=${RPC_URL}`;
 }
 
 /** Send ETH or ERC-20 token. Returns tx hash. */

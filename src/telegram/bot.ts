@@ -10,7 +10,7 @@ import { ApprovalInterface, ApprovalDecision } from "../utils/approval.js";
 import { agentBus, type ToolStartEvent, type ToolEndEvent } from "../utils/events.js";
 import { runAgent, type Message } from "../agent.js";
 import { setApprovalInterface, setGlobalAllow, getGlobalAllowStatus } from "../tools/shell.js";
-import { getAddress, getBalance } from "../tools/wallet.js";
+import { getAddress, getBalance, getNetworkStatus } from "../tools/wallet.js";
 import { startScheduler, stopScheduler, pushSchedulerHistory } from "../runtime/scheduler.js";
 import { history, saveSession, loadSession, startAutosave, stopAutosave } from "../utils/context.js";
 import type { ChatCompletionContentPart } from "openai/resources/chat/completions";
@@ -130,6 +130,7 @@ bot.command("start", (ctx) => {
         "/wallet \\- Show agent wallet address\n" +
         "/balance \\- Show ETH balance\n" +
         "/balance <token_address> \\- Show ERC\\-20 balance\n" +
+        "/rpc \\- Show active chain and RPC endpoint\n" +
         "/revoke \\- Revoke 'Allow All' permission\n" +
         "/update \\- Pull latest code \\& restart\n" +
         "/save \\- Save chat history to disk\n" +
@@ -169,6 +170,16 @@ bot.command("balance", async (ctx) => {
         await ctx.reply(token ? `💰 Token balance: ${balance}` : `💰 ETH balance: ${balance}`);
     } catch (err) {
         await ctx.reply(`❌ Balance error: ${(err as Error).message}`);
+    }
+});
+
+bot.command("rpc", async (ctx) => {
+    if (!authCheck(ctx.chat.id.toString())) { ctx.reply("⛔️ Unauthorized."); return; }
+    try {
+        const status = await getNetworkStatus();
+        await ctx.reply(`🌐 ${status}`);
+    } catch (err) {
+        await ctx.reply(`❌ RPC error: ${(err as Error).message}`);
     }
 });
 
