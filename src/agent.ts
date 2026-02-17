@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import type {
     ChatCompletionMessageParam,
     ChatCompletionMessageToolCall,
+    ChatCompletionContentPart,
 } from "openai/resources/chat/completions";
 import { config } from "./utils/config.js";
 import { TOOLS_SCHEMA, AVAILABLE_TOOLS } from "./tools/registry.js";
@@ -148,7 +149,7 @@ export function getAgentHealthMetrics() {
 }
 
 export async function runAgent(
-    userMessage: string,
+    userMessage: string | ChatCompletionContentPart[],
     history: Message[],
     onToken?: OnTokenCallback
 ): Promise<{ reply: string; history: Message[] }> {
@@ -160,8 +161,8 @@ export async function runAgent(
     // 1. Calculate current context size
     // Note: We build a temporary system prompt to measure it.
     // In a real app, we might cache this, but string concat is cheap enough.
-    const tempSystem = buildSystemPrompt(selectSkill(userMessage, skillRegistry)?.body);
-    const estimatedTokens = estimateTokenCount(tempSystem) + estimateTokenCount(JSON.stringify(history)) + estimateTokenCount(userMessage);
+    const tempSystem = buildSystemPrompt(selectSkill(getTextContent(userMessage), skillRegistry)?.body);
+    const estimatedTokens = estimateTokenCount(tempSystem) + estimateTokenCount(JSON.stringify(history)) + estimateTokenCount(getTextContent(userMessage));
 
     if (estimatedTokens >= config.compactionTokenThreshold) {
         console.log("   💾 Context size (" + estimatedTokens + " tokens) exceeded threshold " + config.compactionTokenThreshold + ". Flushing...");
@@ -170,7 +171,8 @@ export async function runAgent(
     }
 
     // Select a skill if the user's message matches one
-    const matchedSkill = selectSkill(userMessage, skillRegistry);
+    const textContent = getTextContent(userMessage);
+    const matchedSkill = selectSkill(textContent, skillRegistry);
     if (matchedSkill) {
         console.log("   Skill matched: " + matchedSkill.name + " (" + matchedSkill.id + ")");
     }
@@ -274,14 +276,19 @@ export async function runAgent(
             ];
 
             // Log this turn to the daily episodic log
-            logTurnSummary(userMessage, reply);
+            logTurnSummary(getTextContent(userMessage), reply);
 
             // Fire per-turn episodic extraction (non-blocking)
-            extractEpisodicFromTurn(userMessage, reply).catch(() => { });
+            extractEpisodicFromTurn(getTextContent(userMessage), reply).catch(() => { });
 
             return { reply, history: updatedHistory };
         }
     }
+}
+
+function getTextContent(content: string | ChatCompletionContentPart[]): string {
+    if (typeof content === "string") return content;
+    return content.map(p => p.type === "text" ? p.text : "[image]").join(" ");
 }
 
 // ---------------------------------------------------------------------------

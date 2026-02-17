@@ -12,6 +12,7 @@ import { runAgent, type Message } from "../agent.js";
 import { setApprovalInterface, setGlobalAllow, getGlobalAllowStatus } from "../tools/shell.js";
 import { startScheduler, stopScheduler, pushSchedulerHistory } from "../runtime/scheduler.js";
 import { history, saveSession, loadSession } from "../utils/context.js";
+import type { ChatCompletionContentPart } from "openai/resources/chat/completions";
 
 config();
 const execAsync = promisify(exec);
@@ -177,7 +178,7 @@ function authCheck(chatId: string): boolean {
 }
 
 /** Send a prompt to the agent and reply in Telegram */
-async function processAndReply(ctx: any, userContent: string) {
+async function processAndReply(ctx: any, userContent: string | ChatCompletionContentPart[]) {
     if (isProcessing) {
         await ctx.reply("⏳ I'm still thinking… please wait.");
         return;
@@ -235,10 +236,20 @@ bot.on(message("photo"), async (ctx) => {
 
     try {
         const { buffer } = await downloadFile(photo.file_id);
-        const visionPrompt = `[User sent an image with caption: "${caption}"]\n\nImage data (base64) is attached. Please analyze the image and respond to the caption.`;
+        const base64 = buffer.toString("base64");
+
+        const visionContent: ChatCompletionContentPart[] = [
+            { type: "text", text: `[User sent an image with caption: "${caption}"]` },
+            {
+                type: "image_url",
+                image_url: {
+                    url: `data:image/jpeg;base64,${base64}`
+                }
+            }
+        ];
 
         // Fire-and-forget — don't block Telegraf's middleware
-        processAndReply(ctx, visionPrompt);
+        processAndReply(ctx, visionContent);
     } catch (err) {
         ctx.reply(`❌ Image error: ${(err as Error).message}`);
     }
