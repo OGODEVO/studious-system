@@ -347,7 +347,7 @@ bot.on(message("text"), async (ctx) => {
 // ---------------------------------------------------------------------------
 
 async function main() {
-    console.log("🚀 Starting Oasis Telegram Bot…");
+    console.log("🚀 Starting Oasis Telegram Bot (v2.1 - Vision Enabled)…");
 
     loadSession(); // Restore chat history
     startScheduler();
