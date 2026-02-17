@@ -154,6 +154,17 @@ async function executeToolCalls(
     return results;
 }
 
+function detectWalletGuardIntent(userText: string): "wallet_address" | "wallet_balance" | null {
+    const t = userText.toLowerCase();
+    const walletish =
+        t.includes("wallet") || t.includes("address") || t.includes("balance") || t.includes("eth");
+    if (!walletish) return null;
+
+    if (t.includes("address")) return "wallet_address";
+    if (t.includes("balance") || t.includes("how much")) return "wallet_balance";
+    return null;
+}
+
 // ---------------------------------------------------------------------------
 // Agent loop (streaming)
 // ---------------------------------------------------------------------------
@@ -200,6 +211,8 @@ export async function runAgent(
         ...history,
         { role: "user", content: userMessage },
     ];
+    const walletGuardIntent = detectWalletGuardIntent(textContent);
+    let walletToolCalledInTurn = false;
 
     // Tool-call loop — keep going until the model returns a text response
     while (true) {
@@ -270,6 +283,9 @@ export async function runAgent(
                     arguments: tc.arguments,
                 },
             }));
+            if (toolCalls.some((tc) => tc.function.name.startsWith("wallet_"))) {
+                walletToolCalledInTurn = true;
+            }
 
             // Append assistant message with tool calls
             messages.push({
@@ -283,7 +299,17 @@ export async function runAgent(
             messages.push(...toolResults);
         } else {
             // Final text response — done
-            const reply = contentAccum || "(no response)";
+            let reply = contentAccum || "(no response)";
+
+            // Hard guard: for wallet address/balance queries, force tool-backed value if no wallet tool was used.
+            if (walletGuardIntent && !walletToolCalledInTurn) {
+                try {
+                    const guarded = await AVAILABLE_TOOLS[walletGuardIntent]({});
+                    reply = `${reply}\n\n(Verified via ${walletGuardIntent})\n${guarded}`;
+                } catch {
+                    // Keep model reply if guard call fails unexpectedly.
+                }
+            }
 
             const updatedHistory: Message[] = [
                 ...history,
