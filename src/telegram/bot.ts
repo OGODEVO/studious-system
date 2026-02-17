@@ -11,7 +11,7 @@ import { agentBus, type ToolStartEvent } from "../utils/events.js";
 import { runAgent, type Message } from "../agent.js";
 import { setApprovalInterface, setGlobalAllow, getGlobalAllowStatus } from "../tools/shell.js";
 import { startScheduler, stopScheduler, pushSchedulerHistory } from "../runtime/scheduler.js";
-import { history, saveSession, loadSession } from "../utils/context.js";
+import { history, saveSession, loadSession, startAutosave, stopAutosave } from "../utils/context.js";
 import type { ChatCompletionContentPart } from "openai/resources/chat/completions";
 
 config();
@@ -125,8 +125,11 @@ bot.command("start", (ctx) => {
         "🌴 *Oasis Agent Online*\n\n" +
         "Send me text, photos, or documents\\.\n\n" +
         "*Commands:*\n" +
+        "/status \\- Check permission status\n" +
         "/revoke \\- Revoke 'Allow All' permission\n" +
-        "/status \\- Check permission status",
+        "/update \\- Pull latest code \\& restart\n" +
+        "/save \\- Save chat history to disk\n" +
+        "/reset \\- Clear chat history",
         { parse_mode: "MarkdownV2" }
     );
 });
@@ -165,6 +168,19 @@ bot.command("update", async (ctx) => {
     } catch (err) {
         await ctx.reply(`❌ Update failed: ${(err as Error).message}`);
     }
+});
+
+bot.command("save", (ctx) => {
+    if (!authCheck(ctx.chat.id.toString())) { ctx.reply("⛔️ Unauthorized."); return; }
+    saveSession();
+    ctx.reply(`💾 Chat history saved (${history.length} messages).`);
+});
+
+bot.command("reset", (ctx) => {
+    if (!authCheck(ctx.chat.id.toString())) { ctx.reply("⛔️ Unauthorized."); return; }
+    history.length = 0;
+    saveSession();
+    ctx.reply("🧹 Chat history cleared. Starting fresh.");
 });
 
 // ---------------------------------------------------------------------------
@@ -350,6 +366,7 @@ async function main() {
     console.log("🚀 Starting Oasis Telegram Bot (v2.1 - Vision Enabled)…");
 
     loadSession(); // Restore chat history
+    startAutosave(); // Periodic background saves
     startScheduler();
 
     // Subscribe to tool events — send live status to Telegram
@@ -368,8 +385,8 @@ async function main() {
         }
     });
 
-    process.once("SIGINT", () => { bot.stop("SIGINT"); stopScheduler(); saveSession(); });
-    process.once("SIGTERM", () => { bot.stop("SIGTERM"); stopScheduler(); saveSession(); });
+    process.once("SIGINT", () => { bot.stop("SIGINT"); stopScheduler(); stopAutosave(); saveSession(); });
+    process.once("SIGTERM", () => { bot.stop("SIGTERM"); stopScheduler(); stopAutosave(); saveSession(); });
 }
 
 main();

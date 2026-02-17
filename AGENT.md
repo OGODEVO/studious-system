@@ -37,3 +37,23 @@ Oasis is not a chatbot; it is a worker.
 
 
 model="moonshotai/kimi-k2.5",
+
+Hey! 👋 I'm here! Sorry for the delay — looks like there was a hiccup with the image earlier. I can see it now though!
+
+## Image Description
+
+This is a **3D rendered character** of an elderly man with a whimsical, cartoony style:
+
+| Feature | Description |
+|---------|-------------|
+| **Hat** | Orange/red knit beanie |
+| **Hair** | Long, wild white/grey hair sticking out |
+| **Face** | Large expressive blue eyes behind round glasses, prominent pink nose, bushy white mustache and long beard |
+| **Clothing** | Red quilted jacket with blue collar |
+| **Style** | Pixar/DreamWorks-style CGI — very detailed textures and warm lighting |
+
+He has a surprised or curious expression. The rendering quality is excellent — looks like professional character work, possibly from an animated film or game.
+
+---
+
+What's up? Need anything else? 😊
