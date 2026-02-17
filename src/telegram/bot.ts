@@ -85,28 +85,29 @@ bot.action(/^(allow|deny|allow_all):(.+)$/, async (ctx) => {
     const reqId = ctx.match[2];
 
     let decision: ApprovalDecision = "DENY";
-    let text = "";
+    let label = "";
 
     if (action === "allow") {
         decision = "ALLOW";
-        text = "✅ Allowed once.";
+        label = "✅ Allowed once.";
     } else if (action === "allow_all") {
         decision = "ALLOW_ALL";
-        text = "🔓 Allowed ALL commands for this session.";
+        label = "🔓 Allowed ALL commands for this session.";
     } else {
         decision = "DENY";
-        text = "🛑 Denied.";
+        label = "🛑 Denied.";
     }
+
+    // Answer the callback query immediately (stops the button spinner)
+    await ctx.answerCbQuery(label);
 
     tgApproval.resolveReq(reqId, decision);
 
     try {
         const msg = ctx.callbackQuery.message;
         if (msg && "text" in msg) {
-            await ctx.editMessageText(
-                `${msg.text}\n\n👉 ${text}`,
-                { parse_mode: "HTML" }
-            );
+            // Replace the approval message with the decision (no parse_mode — plain text is safer)
+            await ctx.editMessageText(`${msg.text}\n\n👉 ${label}`);
         }
     } catch {
         // ignore if message too old
@@ -206,47 +207,16 @@ bot.on(message("photo"), async (ctx) => {
     if (!photo) return;
 
     const caption = ctx.message.caption || "Describe this image.";
-    await ctx.reply("📷 Processing image…");
+    ctx.reply("📷 Processing image…");
 
     try {
         const { buffer } = await downloadFile(photo.file_id);
-        const base64 = buffer.toString("base64");
-        const dataUri = `data:image/jpeg;base64,${base64}`;
-
-        // Build vision content for the model
         const visionPrompt = `[User sent an image with caption: "${caption}"]\n\nImage data (base64) is attached. Please analyze the image and respond to the caption.`;
 
-        // Push a text summary into history (we can't store images in our simple history)
-        history.push({ role: "user", content: `[Sent an image: "${caption}"]` });
-
-        if (isProcessing) {
-            await ctx.reply("⏳ I'm still thinking… please wait.");
-            return;
-        }
-
-        isProcessing = true;
-        await ctx.sendChatAction("typing");
-
-        try {
-            const apiHistory = history.slice(0, -1).map(m => ({ role: m.role, content: m.content }));
-
-            // Build messages with vision content part
-            const result = await runAgent(visionPrompt, apiHistory as any);
-
-            history.push({ role: "assistant", content: result.reply });
-            pushSchedulerHistory({ role: "assistant", content: result.reply });
-
-            if (result.reply.length > 4000) {
-                const chunks = result.reply.match(/.{1,4000}/gs) || [result.reply];
-                for (const chunk of chunks) await ctx.reply(chunk);
-            } else {
-                await ctx.reply(result.reply);
-            }
-        } finally {
-            isProcessing = false;
-        }
+        // Fire-and-forget — don't block Telegraf's middleware
+        processAndReply(ctx, visionPrompt);
     } catch (err) {
-        await ctx.reply(`❌ Image error: ${(err as Error).message}`);
+        ctx.reply(`❌ Image error: ${(err as Error).message}`);
     }
 });
 
@@ -273,7 +243,7 @@ bot.on(message("document"), async (ctx) => {
             const { buffer } = await downloadFile(doc.file_id);
             const text = buffer.toString("utf-8");
             const truncated = text.length > 8000 ? text.slice(0, 8000) + "\n…(truncated)" : text;
-            await processAndReply(ctx, `${caption}\n\n--- File: ${fileName} ---\n${truncated}`);
+            processAndReply(ctx, `${caption}\n\n--- File: ${fileName} ---\n${truncated}`);
         } catch (err) {
             await ctx.reply(`❌ Error reading ${fileName}: ${(err as Error).message}`);
         }
@@ -309,7 +279,7 @@ bot.on(message("document"), async (ctx) => {
         }
 
         const truncated = markdown.length > 8000 ? markdown.slice(0, 8000) + "\n…(truncated)" : markdown;
-        await processAndReply(ctx, `${caption}\n\n--- Extracted from: ${fileName} ---\n${truncated}`);
+        processAndReply(ctx, `${caption}\n\n--- Extracted from: ${fileName} ---\n${truncated}`);
 
     } catch (err) {
         await ctx.reply(`❌ Docling error: ${(err as Error).message}`);
@@ -329,7 +299,8 @@ bot.on(message("text"), async (ctx) => {
     const text = ctx.message.text;
     if (text.startsWith("/")) return;
 
-    await processAndReply(ctx, text);
+    // Fire-and-forget — don't block Telegraf's middleware
+    processAndReply(ctx, text);
 });
 
 // ---------------------------------------------------------------------------
