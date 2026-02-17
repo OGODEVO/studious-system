@@ -11,6 +11,7 @@ import { agentBus, type ToolStartEvent, type ToolEndEvent } from "../utils/event
 import { runAgent, type Message, type PlanningMode } from "../agent.js";
 import { setApprovalInterface, setGlobalAllow, getGlobalAllowStatus } from "../tools/shell.js";
 import { getAddress, getBalance, getNetworkStatus, getTransactionStatus } from "../tools/wallet.js";
+import { AVAILABLE_TOOLS } from "../tools/registry.js";
 import { startScheduler, stopScheduler, pushSchedulerHistory } from "../runtime/scheduler.js";
 import { history, saveSession, loadSession, startAutosave, stopAutosave } from "../utils/context.js";
 import type { ChatCompletionContentPart } from "openai/resources/chat/completions";
@@ -56,10 +57,9 @@ class TelegramApproval implements ApprovalInterface {
                     parse_mode: "HTML",
                     ...Markup.inlineKeyboard([
                         [
-                            Markup.button.callback("✅ Allow Once", `allow:${reqId}`),
-                            Markup.button.callback("🛑 Deny", `deny:${reqId}`),
-                        ],
-                        [Markup.button.callback("🔓 Allow ALL (Until Revoked)", `allow_all:${reqId}`)],
+                            Markup.button.callback("✅ Approve", `allow:${reqId}`),
+                            Markup.button.callback("🛑 No", `deny:${reqId}`),
+                        ]
                     ]),
                 }
             ).catch(err => {
@@ -275,6 +275,27 @@ async function performBalance(ctx: any, token?: string): Promise<void> {
     await ctx.reply(token ? `💰 Token balance: ${balance}` : `💰 ETH balance: ${balance}`);
 }
 
+function parseSendIntent(text: string): { to: string; amount?: string } | null {
+    const addressMatch = text.match(/0x[a-fA-F0-9]{40}/);
+    if (!addressMatch) return null;
+
+    const hasSendSignal =
+        /\bsend\b/i.test(text) || /\btransfer\b/i.test(text) || /\bpayout\b/i.test(text);
+    if (!hasSendSignal) return null;
+
+    const amountMatch = text.match(/(\d+(?:\.\d+)?)\s*(eth)\b/i);
+    return {
+        to: addressMatch[0],
+        amount: amountMatch?.[1],
+    };
+}
+
+async function performSendEth(ctx: any, to: string, amount: string): Promise<void> {
+    await ctx.reply(`Preparing transfer: ${amount} ETH to ${to}`);
+    const result = await AVAILABLE_TOOLS.wallet_send({ to, amount });
+    await ctx.reply(result);
+}
+
 async function performUpdate(ctx: any): Promise<void> {
     await ctx.reply("🔄 Checking for updates...");
 
@@ -301,7 +322,8 @@ function contentToText(userContent: string | ChatCompletionContentPart[]): strin
 }
 
 async function routeDeterministicIntent(ctx: any, userContent: string | ChatCompletionContentPart[]): Promise<boolean> {
-    const text = contentToText(userContent).toLowerCase();
+    const rawText = contentToText(userContent);
+    const text = rawText.toLowerCase();
     if (!text) return false;
 
     if (/(^|\b)(switch to|set)(\s+)?autonomous mode(\b|$)/i.test(text)) {
@@ -342,6 +364,16 @@ async function routeDeterministicIntent(ctx: any, userContent: string | ChatComp
         /\b(balance|how much eth|eth balance)\b/i.test(text);
     if (wantsBalance) {
         await performBalance(ctx);
+        return true;
+    }
+
+    const sendIntent = parseSendIntent(rawText);
+    if (sendIntent) {
+        if (!sendIntent.amount) {
+            await ctx.reply(`Specify amount too. Example: send 0.005 ETH ${sendIntent.to}`);
+            return true;
+        }
+        await performSendEth(ctx, sendIntent.to, sendIntent.amount);
         return true;
     }
 
@@ -520,12 +552,12 @@ bot.on(message("text"), async (ctx) => {
 
     const normalized = text.trim().toLowerCase();
     const canonical = normalized.replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
-    if (tgApproval.hasPending()) {
-        const allowOnce = new Set(["approve", "approved", "yes", "y", "allow", "ok"]);
-        const allowAll = new Set(["allow all", "always allow", "approve all"]);
-        const deny = new Set(["deny", "no", "n", "cancel", "reject"]);
+    const approveWords = new Set(["approve", "approved", "yes", "y", "allow", "ok"]);
+    const denyWords = new Set(["deny", "no", "n", "cancel", "reject"]);
+    const allowAllWords = new Set(["allow all", "always allow", "approve all"]);
 
-        if (allowAll.has(canonical)) {
+    if (tgApproval.hasPending()) {
+        if (allowAllWords.has(canonical)) {
             const resolved = tgApproval.resolveLatest("ALLOW_ALL");
             if (resolved) {
                 await ctx.reply("✅ Approved.");
@@ -533,7 +565,7 @@ bot.on(message("text"), async (ctx) => {
             }
         }
 
-        if (allowOnce.has(canonical)) {
+        if (approveWords.has(canonical)) {
             const resolved = tgApproval.resolveLatest("ALLOW");
             if (resolved) {
                 await ctx.reply("✅ Approved.");
@@ -541,13 +573,16 @@ bot.on(message("text"), async (ctx) => {
             }
         }
 
-        if (deny.has(canonical)) {
+        if (denyWords.has(canonical)) {
             const resolved = tgApproval.resolveLatest("DENY");
             if (resolved) {
                 await ctx.reply("🛑 Denied.");
                 return;
             }
         }
+    } else if (approveWords.has(canonical) || denyWords.has(canonical) || allowAllWords.has(canonical)) {
+        await ctx.reply("No pending approval request right now.");
+        return;
     }
 
     // Fire-and-forget — don't block Telegraf's middleware
