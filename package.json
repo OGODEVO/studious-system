@@ -6,12 +6,15 @@
   "scripts": {
     "start": "tsx src/index.tsx",
     "dev": "tsx watch src/index.tsx",
+    "gui": "tsx src/server/start-gui.ts",
     "build": "tsc",
-    "postinstall": "playwright install chromium"
+    "postinstall": "playwright install chromium",
+    "web": "tsx src/web/server.ts"
   },
   "dependencies": {
     "@types/react": "^19.2.14",
     "dotenv": "^16.4.0",
+    "express": "^5.2.1",
     "ink": "^6.7.0",
     "ink-big-text": "^2.0.0",
     "ink-box": "^1.0.0",
@@ -23,11 +26,14 @@
     "playwright": "^1.49.0",
     "react": "^19.2.4",
     "tiktoken": "^1.0.22",
+    "ws": "^8.19.0",
     "zustand": "^5.0.11"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }

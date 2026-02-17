@@ -5,6 +5,7 @@ import { closeBrowser } from "./tools/browser.js";
 import { saveSessionSnapshot } from "./memory/manager.js";
 import { useStore } from "./ui/store.js";
 import { config } from "./utils/config.js";
+import { startScheduler, stopScheduler } from "./runtime/scheduler.js";
 
 // --- Console Patching ---
 // Redirect console logs to the UI store so they don't break the TUI layout
@@ -33,6 +34,7 @@ console.warn = (...args: any[]) => {
 async function main() {
     // No eager browser launch — browser starts lazily when a tool needs it
     useStore.getState().addMessage({ role: "system", content: "🌴 Oasis Agent ready." });
+    startScheduler();
 
     // Render UI
     const { unmount, waitUntilExit } = render(<App />);
@@ -48,6 +50,7 @@ async function main() {
             const snap = saveSessionSnapshot(history);
             if (snap) originalLog(`Snapshot saved: ${snap}`); // Log to original stdout if UI is gone
         }
+        stopScheduler();
         await closeBrowser();
         unmount();
         process.exit(0);

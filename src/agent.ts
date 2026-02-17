@@ -16,6 +16,7 @@ import {
     buildSkillSummary,
     selectSkill,
 } from "./skills/registry.js";
+import { ResilientExecutor } from "./runtime/resilience.js";
 
 const BASE_SYSTEM_PROMPT = `You are Oasis, a capable browser-automation agent.
 You can browse the web, interact with pages, extract information, and search Google.
@@ -33,6 +34,18 @@ Guidelines:
 const client = new OpenAI({
     apiKey: config.openaiKey,
     baseURL: config.openaiBaseUrl,
+});
+const agentCompletionExecutor = new ResilientExecutor({
+    retry: {
+        maxAttempts: 3,
+        baseDelayMs: 400,
+        maxDelayMs: 4000,
+        jitterRatio: 0.2,
+    },
+    circuitBreaker: {
+        failureThreshold: 4,
+        cooldownMs: 60 * 1000,
+    },
 });
 
 export type Message = ChatCompletionMessageParam;
@@ -116,6 +129,10 @@ async function executeToolCalls(
 
 export type OnTokenCallback = (token: string) => void;
 
+export function getAgentHealthMetrics() {
+    return agentCompletionExecutor.getAllMetrics();
+}
+
 export async function runAgent(
     userMessage: string,
     history: Message[],
@@ -154,15 +171,19 @@ export async function runAgent(
 
     // Tool-call loop — keep going until the model returns a text response
     while (true) {
-        const stream = await client.chat.completions.create({
-            model: config.model,
-            messages,
-            tools: TOOLS_SCHEMA,
-            tool_choice: "auto",
-            temperature: config.temperature,
-            max_tokens: config.maxTokens,
-            stream: true,
-        });
+        const stream = await agentCompletionExecutor.execute(
+            "agent:chat_completion_stream",
+            () =>
+                client.chat.completions.create({
+                    model: config.model,
+                    messages,
+                    tools: TOOLS_SCHEMA,
+                    tool_choice: "auto",
+                    temperature: config.temperature,
+                    max_tokens: config.maxTokens,
+                    stream: true,
+                })
+        );
 
         // Accumulate the streamed response
         let contentAccum = "";

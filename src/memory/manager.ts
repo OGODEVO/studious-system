@@ -7,12 +7,25 @@ import type {
 } from "openai/resources/chat/completions";
 import { config } from "../utils/config.js";
 import type { Message } from "../agent.js";
+import { ResilientExecutor } from "../runtime/resilience.js";
 
 // ---------------------------------------------------------------------------
 // Dedicated memory extraction client (supports any OpenAI v1 endpoint)
 // ---------------------------------------------------------------------------
 
 let _memoryClient: OpenAI | null = null;
+const memoryCompletionExecutor = new ResilientExecutor({
+    retry: {
+        maxAttempts: 3,
+        baseDelayMs: 500,
+        maxDelayMs: 5000,
+        jitterRatio: 0.2,
+    },
+    circuitBreaker: {
+        failureThreshold: 4,
+        cooldownMs: 60 * 1000,
+    },
+});
 
 function getMemoryClient(): OpenAI {
     if (!_memoryClient) {
@@ -22,6 +35,10 @@ function getMemoryClient(): OpenAI {
         });
     }
     return _memoryClient;
+}
+
+export function getMemoryHealthMetrics() {
+    return memoryCompletionExecutor.getAllMetrics();
 }
 
 // ---------------------------------------------------------------------------
@@ -323,14 +340,18 @@ export async function flushBeforeCompaction(history: Message[]): Promise<void> {
     try {
         // Tool-call loop — memory agent searches, reads, then writes
         for (let i = 0; i < 8; i++) {
-            const completion = await client.chat.completions.create({
-                model: config.memoryModel,
-                messages,
-                tools: MEMORY_TOOLS,
-                tool_choice: i < 6 ? "auto" : "none", // force finish after 6 iterations
-                temperature: config.memoryTemperature,
-                max_completion_tokens: config.memoryMaxTokens,
-            });
+            const completion = await memoryCompletionExecutor.execute(
+                "memory:flush_compaction",
+                () =>
+                    client.chat.completions.create({
+                        model: config.memoryModel,
+                        messages,
+                        tools: MEMORY_TOOLS,
+                        tool_choice: i < 6 ? "auto" : "none", // force finish after 6 iterations
+                        temperature: config.memoryTemperature,
+                        max_completion_tokens: config.memoryMaxTokens,
+                    })
+            );
 
             const msg = completion.choices[0].message;
 
@@ -400,15 +421,19 @@ async function generateConversationSummary(history: Message[]): Promise<string |
         .join("\n");
 
     try {
-        const completion = await client.chat.completions.create({
-            model: config.memoryModel,
-            messages: [
-                { role: "system", content: SUMMARY_PROMPT },
-                { role: "user", content: conversationText },
-            ],
-            temperature: 0.2,
-            max_completion_tokens: config.memoryMaxTokens,
-        });
+        const completion = await memoryCompletionExecutor.execute(
+            "memory:summary_generation",
+            () =>
+                client.chat.completions.create({
+                    model: config.memoryModel,
+                    messages: [
+                        { role: "system", content: SUMMARY_PROMPT },
+                        { role: "user", content: conversationText },
+                    ],
+                    temperature: 0.2,
+                    max_completion_tokens: config.memoryMaxTokens,
+                })
+        );
 
         return completion.choices[0]?.message?.content || null;
     } catch {
@@ -448,14 +473,18 @@ export async function extractEpisodicFromTurn(
 
     try {
         for (let i = 0; i < 4; i++) {
-            const completion = await client.chat.completions.create({
-                model: config.memoryModel,
-                messages,
-                tools: MEMORY_TOOLS,
-                tool_choice: i < 3 ? "auto" : "none",
-                temperature: config.memoryTemperature,
-                max_completion_tokens: config.memoryMaxTokens,
-            });
+            const completion = await memoryCompletionExecutor.execute(
+                "memory:episodic_extraction",
+                () =>
+                    client.chat.completions.create({
+                        model: config.memoryModel,
+                        messages,
+                        tools: MEMORY_TOOLS,
+                        tool_choice: i < 3 ? "auto" : "none",
+                        temperature: config.memoryTemperature,
+                        max_completion_tokens: config.memoryMaxTokens,
+                    })
+            );
 
             const msg = completion.choices[0].message;
 

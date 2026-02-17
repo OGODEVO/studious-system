@@ -35,3 +35,17 @@ memory:
   extract_every_n_turns: 3                     # run episodic extraction every N turns
   # compaction_threshold is now derived from system.context_window * 0.7
   max_recent_episodes: 5                       # how many episodes to load at bootstrap
+
+scheduler:
+  enabled: true
+  tick_seconds: 15
+  reminders:
+    - id: "daily-llc-followup"
+      enabled: false
+      interval_minutes: 120
+      lane: "background"
+      prompt: "Reminder: work the LLC setup task and report the next concrete step."
+  heartbeat:
+    enabled: true
+    interval_minutes: 30
+    prompt: "Heartbeat: check queue backlog, memory pressure, and blocked work. Report concise actionable next steps."

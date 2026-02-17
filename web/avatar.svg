@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </radialGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#c084fc"/>
+      <stop offset="50%" stop-color="#60a5fa"/>
+      <stop offset="100%" stop-color="#34d399"/>
+    </linearGradient>
+    <filter id="neon">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <!-- Background circle -->
+  <circle cx="100" cy="100" r="96" fill="url(#bg)" stroke="url(#glow)" stroke-width="2"/>
+  <!-- Palm trunk -->
+  <path d="M100 170 Q102 130 98 95" stroke="url(#glow)" stroke-width="5" fill="none" stroke-linecap="round" filter="url(#neon)"/>
+  <!-- Palm fronds -->
+  <path d="M98 95 Q60 60 35 70" stroke="#c084fc" stroke-width="3" fill="none" stroke-linecap="round" filter="url(#neon)"/>
+  <path d="M98 95 Q70 50 50 45" stroke="#a78bfa" stroke-width="3" fill="none" stroke-linecap="round" filter="url(#neon)"/>
+  <path d="M98 95 Q100 40 95 30" stroke="#60a5fa" stroke-width="3" fill="none" stroke-linecap="round" filter="url(#neon)"/>
+  <path d="M98 95 Q130 50 150 45" stroke="#60a5fa" stroke-width="3" fill="none" stroke-linecap="round" filter="url(#neon)"/>
+  <path d="M98 95 Q140 60 165 70" stroke="#34d399" stroke-width="3" fill="none" stroke-linecap="round" filter="url(#neon)"/>
+  <!-- Ground reflection -->
+  <ellipse cx="100" cy="175" rx="30" ry="5" fill="url(#glow)" opacity="0.3" filter="url(#neon)"/>
+  <!-- Stars -->
+  <circle cx="40" cy="35" r="1.5" fill="#e5e7eb" opacity="0.7"/>
+  <circle cx="160" cy="30" r="1" fill="#e5e7eb" opacity="0.5"/>
+  <circle cx="150" cy="55" r="1.5" fill="#e5e7eb" opacity="0.6"/>
+  <circle cx="55" cy="50" r="1" fill="#e5e7eb" opacity="0.4"/>
+  <circle cx="170" cy="85" r="1" fill="#e5e7eb" opacity="0.5"/>
+  <circle cx="30" cy="80" r="1.5" fill="#e5e7eb" opacity="0.6"/>
+</svg>

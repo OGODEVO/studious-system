@@ -47,6 +47,22 @@ interface OasisConfig {
         // compaction_token_threshold is derived
         max_recent_episodes: number;
     };
+    scheduler?: {
+        enabled?: boolean;
+        tick_seconds?: number;
+        reminders?: Array<{
+            id: string;
+            enabled?: boolean;
+            interval_minutes: number;
+            lane?: "fast" | "slow" | "background";
+            prompt: string;
+        }>;
+        heartbeat?: {
+            enabled?: boolean;
+            interval_minutes?: number;
+            prompt?: string;
+        };
+    };
 }
 
 function loadYamlConfig(): OasisConfig {
@@ -109,6 +125,26 @@ export const config = {
     // Dynamic compaction threshold: 90% of context window (leaves ~10% buffer for output)
     compactionTokenThreshold: Math.floor((yamlConfig.system.context_window || 128000) * 0.9),
     maxRecentEpisodes: yamlConfig.memory.max_recent_episodes,
+
+    // Scheduler
+    scheduler: {
+        enabled: yamlConfig.scheduler?.enabled ?? true,
+        tickSeconds: yamlConfig.scheduler?.tick_seconds ?? 15,
+        reminders: (yamlConfig.scheduler?.reminders ?? []).map((r) => ({
+            id: r.id,
+            enabled: r.enabled ?? true,
+            intervalMinutes: r.interval_minutes,
+            lane: r.lane ?? "background",
+            prompt: r.prompt,
+        })),
+        heartbeat: {
+            enabled: yamlConfig.scheduler?.heartbeat?.enabled ?? true,
+            intervalMinutes: yamlConfig.scheduler?.heartbeat?.interval_minutes ?? 30,
+            prompt:
+                yamlConfig.scheduler?.heartbeat?.prompt ??
+                "Heartbeat check-in: review queue health, pending tasks, and blockers; then report only actionable next steps.",
+        },
+    },
 } as const;
 
 if (!config.openaiKey) {
