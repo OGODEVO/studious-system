@@ -64,6 +64,11 @@ Runtime commands:
 - `/heartbeat off` (disable)
 - `/grade` (resilience scorecard)
 
+Update behavior:
+- `self_update` supports `remote`, `branch`, optional `ref`, and `install`.
+- Default update target is latest pushed commit on `origin/<current-branch>` via fast-forward only.
+- Returns a before/after commit hash report.
+
 ## Wallet Tool Reliability
 
 If the agent ever returns an incorrect wallet value in chat, treat it as a tool-usage miss (model answered without calling wallet tools), not as a canonical source of truth.

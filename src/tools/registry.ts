@@ -166,8 +166,17 @@ export const TOOLS_SCHEMA: ChatCompletionTool[] = [
         type: "function",
         function: {
             name: "self_update",
-            description: "Updates the agent's code from the git repository, installs dependencies, and restarts the process. Use when the user asks to update.",
-            parameters: { type: "object", properties: {} },
+            description:
+                "Update agent code to the latest pushed commit on a target remote/branch (or a specific ref), then restart. Uses fast-forward-only update semantics.",
+            parameters: {
+                type: "object",
+                properties: {
+                    remote: { type: "string", description: "Git remote name (default: origin)" },
+                    branch: { type: "string", description: "Target branch name (default: current branch)" },
+                    ref: { type: "string", description: "Optional specific commit/tag/ref to fast-forward merge" },
+                    install: { type: "boolean", description: "Run npm install after update (default: true)" },
+                },
+            },
         },
     },
     {
@@ -253,7 +262,15 @@ export const AVAILABLE_TOOLS: Record<string, ToolFn> = {
         ),
     get_current_url: () => getCurrentUrl(),
     run_command: (a) => runCommand(a as { command: string }),
-    self_update: () => selfUpdate(),
+    self_update: (a) =>
+        selfUpdate(
+            a as {
+                remote?: string;
+                branch?: string;
+                ref?: string;
+                install?: boolean;
+            }
+        ),
     wallet_address: async () => {
         const addr = await getAddress();
         return `Wallet address: ${addr}`;

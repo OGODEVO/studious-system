@@ -100,22 +100,66 @@ export async function runCommand(args: { command: string }): Promise<string> {
     }
 }
 
-export async function selfUpdate(): Promise<string> {
+interface SelfUpdateArgs {
+    remote?: string;
+    branch?: string;
+    ref?: string;
+    install?: boolean;
+}
+
+export async function selfUpdate(args: SelfUpdateArgs = {}): Promise<string> {
     console.log("🔄 Self-update initiated via tool...");
     try {
-        const { stdout } = await execAsync("git pull");
-        if (stdout.includes("Already up to date")) {
-            return "✅ Already up to date.";
+        const remote = (args.remote || "origin").trim();
+
+        const branch = (args.branch && args.branch.trim())
+            ? args.branch.trim()
+            : (await execAsync("git rev-parse --abbrev-ref HEAD")).stdout.trim();
+
+        const targetRef = (args.ref && args.ref.trim())
+            ? args.ref.trim()
+            : `${remote}/${branch}`;
+
+        const installDeps = args.install !== false;
+
+        const before = (await execAsync("git rev-parse HEAD")).stdout.trim();
+
+        await execAsync(`git fetch ${remote} --prune`);
+
+        // If user provided a concrete ref/hash, verify it exists locally after fetch.
+        if (args.ref && args.ref.trim()) {
+            await execAsync(`git rev-parse --verify --quiet ${targetRef}^{commit}`);
+            await execAsync(`git merge --ff-only ${targetRef}`);
+        } else {
+            // Default path: fast-forward current branch to latest pushed branch tip.
+            await execAsync(`git pull --ff-only ${remote} ${branch}`);
         }
 
-        await execAsync("npm install");
+        const after = (await execAsync("git rev-parse HEAD")).stdout.trim();
+
+        if (before === after) {
+            return `✅ Already up to date.\nBranch: ${branch}\nRemote: ${remote}\nHEAD: ${after}`;
+        }
+
+        if (installDeps) {
+            await execAsync("npm install");
+        }
 
         saveSession();
 
         // Return response so agent knows what happened, then exit
         setTimeout(() => process.exit(0), 1000);
 
-        return `⬇️  Updates applied:\n${stdout}\n\n♻️  Restarting agent...`;
+        return (
+            `⬇️ Updates applied.\n` +
+            `Remote: ${remote}\n` +
+            `Branch: ${branch}\n` +
+            `Target: ${targetRef}\n` +
+            `HEAD before: ${before}\n` +
+            `HEAD after:  ${after}\n` +
+            `Install deps: ${installDeps ? "yes" : "no"}\n\n` +
+            `♻️ Restarting agent...`
+        );
     } catch (err: any) {
         return `❌ Update failed: ${err.message}`;
     }
