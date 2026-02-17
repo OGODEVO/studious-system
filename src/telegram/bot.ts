@@ -155,8 +155,7 @@ bot.command("status", (ctx) => {
 bot.command("wallet", async (ctx) => {
     if (!authCheck(ctx.chat.id.toString())) { ctx.reply("⛔️ Unauthorized."); return; }
     try {
-        const address = await getAddress();
-        await ctx.reply(`👛 Wallet address: ${address}`);
+        await performWalletAddress(ctx);
     } catch (err) {
         await ctx.reply(`❌ Wallet error: ${(err as Error).message}`);
     }
@@ -167,8 +166,7 @@ bot.command("balance", async (ctx) => {
     try {
         const text = ctx.message.text || "";
         const token = text.split(" ").slice(1).join(" ").trim() || undefined;
-        const balance = await getBalance(token);
-        await ctx.reply(token ? `💰 Token balance: ${balance}` : `💰 ETH balance: ${balance}`);
+        await performBalance(ctx, token);
     } catch (err) {
         await ctx.reply(`❌ Balance error: ${(err as Error).message}`);
     }
@@ -202,23 +200,8 @@ bot.command("tx", async (ctx) => {
 
 bot.command("update", async (ctx) => {
     if (!authCheck(ctx.chat.id.toString())) { ctx.reply("⛔️ Unauthorized."); return; }
-
-    await ctx.reply("🔄 Checking for updates...");
-
     try {
-        const { stdout } = await execAsync("git pull");
-
-        if (stdout.includes("Already up to date")) {
-            await ctx.reply("✅ Already up to date.");
-            return;
-        }
-
-        await ctx.reply(`⬇️ Updates found:\n<pre>${stdout}</pre>\n\n📦 Installing dependencies...`, { parse_mode: "HTML" });
-        await execAsync("npm install");
-
-        await ctx.reply("♻️ Restarting to apply changes...");
-        saveSession();
-        process.exit(0); // PM2 will restart us
+        await performUpdate(ctx);
     } catch (err) {
         await ctx.reply(`❌ Update failed: ${(err as Error).message}`);
     }
@@ -247,6 +230,71 @@ function authCheck(chatId: string): boolean {
     return !ALLOWED_CHAT_ID || chatId === ALLOWED_CHAT_ID;
 }
 
+async function performWalletAddress(ctx: any): Promise<void> {
+    const address = await getAddress();
+    await ctx.reply(`👛 Wallet address: ${address}`);
+}
+
+async function performBalance(ctx: any, token?: string): Promise<void> {
+    const balance = await getBalance(token);
+    await ctx.reply(token ? `💰 Token balance: ${balance}` : `💰 ETH balance: ${balance}`);
+}
+
+async function performUpdate(ctx: any): Promise<void> {
+    await ctx.reply("🔄 Checking for updates...");
+
+    const { stdout } = await execAsync("git pull");
+    if (stdout.includes("Already up to date")) {
+        await ctx.reply("✅ Already up to date.");
+        return;
+    }
+
+    await ctx.reply(`⬇️ Updates found:\n<pre>${stdout}</pre>\n\n📦 Installing dependencies...`, { parse_mode: "HTML" });
+    await execAsync("npm install");
+
+    await ctx.reply("♻️ Restarting to apply changes...");
+    saveSession();
+    process.exit(0); // PM2/systemd should restart us
+}
+
+function contentToText(userContent: string | ChatCompletionContentPart[]): string {
+    if (typeof userContent === "string") return userContent;
+    return userContent
+        .map((p) => p.type === "text" ? p.text : "")
+        .join(" ")
+        .trim();
+}
+
+async function routeDeterministicIntent(ctx: any, userContent: string | ChatCompletionContentPart[]): Promise<boolean> {
+    const text = contentToText(userContent).toLowerCase();
+    if (!text) return false;
+
+    const wantsUpdate =
+        /(^|\\b)(update yourself|self[- ]?update|update the agent|pull latest|update to latest|update now)(\\b|$)/i.test(text);
+    if (wantsUpdate) {
+        await performUpdate(ctx);
+        return true;
+    }
+
+    const wantsWalletAddress =
+        (text.includes("wallet") && text.includes("address")) ||
+        text.includes("what is your wallet");
+    if (wantsWalletAddress) {
+        await performWalletAddress(ctx);
+        return true;
+    }
+
+    const wantsBalance =
+        text.includes("wallet balance") ||
+        /\\b(balance|how much eth|eth balance)\\b/i.test(text);
+    if (wantsBalance) {
+        await performBalance(ctx);
+        return true;
+    }
+
+    return false;
+}
+
 /** Send a prompt to the agent and reply in Telegram */
 async function processAndReply(ctx: any, userContent: string | ChatCompletionContentPart[]) {
     if (isProcessing) {
@@ -263,6 +311,10 @@ async function processAndReply(ctx: any, userContent: string | ChatCompletionCon
     await ctx.sendChatAction("typing");
 
     try {
+        if (await routeDeterministicIntent(ctx, userContent)) {
+            return;
+        }
+
         const apiHistory = history.map(m => ({ role: m.role, content: m.content }));
         const result = await runAgent(userContent, apiHistory as any);
 

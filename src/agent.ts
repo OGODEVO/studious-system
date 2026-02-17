@@ -40,6 +40,7 @@ Guidelines:
 - Use search_google when you need raw SERP behavior from Google specifically.
 - For any wallet-specific question (address, balance, token holdings, tx hash), ALWAYS call the corresponding wallet tool first. Never guess or reuse a previously stated wallet value without re-checking.
 - For heartbeat scheduling requests, use heartbeat_status / heartbeat_set / heartbeat_disable tools instead of telling the user to edit config files.
+- In Telegram runtime, critical intents may be routed deterministically (update/wallet/balance) before LLM planning; align with those direct tool-backed paths.
 - Shell commands (run_command) may require user approval depending on the current permission mode.
 - Be concise. Summarize findings clearly.
 - If a tool call fails, try an alternative approach before giving up.
