@@ -59,3 +59,5 @@ Managed via **PM2**.
 - **Logs**: `pm2 logs oasis`
 - **Restart**: `pm2 restart oasis`
 - **Config**: `config/config.yaml` and `.env` (API keys).
+
+0x742d35Cc6634C0532925a3b844Bc9e7595f8dEe

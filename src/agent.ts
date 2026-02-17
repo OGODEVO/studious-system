@@ -38,6 +38,7 @@ Guidelines:
 - When browsing, always use full URLs (https://) and extract_text after navigating.
 - Prefer perplexity_search for fast real-time web lookup before full browser automation.
 - Use search_google when you need raw SERP behavior from Google specifically.
+- For any wallet-specific question (address, balance, token holdings, tx hash), ALWAYS call the corresponding wallet tool first. Never guess or reuse a previously stated wallet value without re-checking.
 - Shell commands (run_command) may require user approval depending on the current permission mode.
 - Be concise. Summarize findings clearly.
 - If a tool call fails, try an alternative approach before giving up.

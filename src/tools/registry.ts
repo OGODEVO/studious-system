@@ -174,7 +174,7 @@ export const TOOLS_SCHEMA: ChatCompletionTool[] = [
         type: "function",
         function: {
             name: "wallet_address",
-            description: "Returns the agent's own ETH wallet public address.",
+            description: "Returns the agent's own ETH wallet public address. MUST be called whenever the user asks for wallet address; do not infer or reuse stale values.",
             parameters: { type: "object", properties: {} },
         },
     },

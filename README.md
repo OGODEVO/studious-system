@@ -1,55 +1,89 @@
-# Oasis — Browser Automation Agent
+# Oasis Agent
 
-A general-purpose browser agent powered by **Playwright** + **OpenAI**. Ask it anything that requires browsing the web.
+Autonomous agent runtime with:
+- browser automation (Playwright)
+- real-time search (Perplexity Search API)
+- queue lanes + scheduler/heartbeat
+- TUI and web dashboard interfaces
 
 ## Quick Start
 
 ```bash
-cd oasis
-
-# Install dependencies + Chromium
+cd studious-system
 npm install
+cp .env.example .env
+# edit .env and set keys
+```
 
-# Set your OpenAI key
-cp .env .env.local  # edit .env with your key
+Run TUI:
 
-# Run
+```bash
 npm start
 ```
 
-## Usage
+Run web dashboard:
 
-```
-You → Go to espn.com/nba and tell me today's scores
-   🤔 Thinking...
-   🔧 navigate → ✅ Navigated to https://www.espn.com/nba/...
-   🔧 extract_text → NBA Scores...
-🌴 Oasis:
-Here are today's NBA scores: ...
+```bash
+npm run web
+# open http://localhost:3000
 ```
 
-### Commands
-- Type any request → agent browses + reasons
-- `/clear` → reset conversation history
-- `exit` / `quit` → stop
+## Environment
 
-## Available Tools
+Required:
 
-| Tool | What it does |
-|------|-------------|
-| `navigate(url)` | Go to a URL |
-| `click(selector)` | Click an element |
-| `type_text(selector, text)` | Type into an input |
-| `extract_text(selector?)` | Read page content |
-| `screenshot()` | Save a screenshot |
-| `get_links()` | List all links on page |
-| `search_google(query)` | Google search |
-| `get_current_url()` | Current page info |
-
-## Config (`.env`)
-
+```bash
+OPENAI_API_KEY=...
 ```
-OPENAI_API_KEY=sk-...
-OASIS_MODEL=gpt-4o          # any OpenAI model
-OASIS_HEADLESS=true          # false to see the browser
+
+Optional (based on provider/tooling):
+
+```bash
+NOVITA_API_KEY=...
+PERPLEXITY_API_KEY=...
+PERPLEXITY_BASE_URL=https://api.perplexity.ai
 ```
+
+## Perplexity Search vs Browser Automation
+
+Use `perplexity_search` when you need fast, current web retrieval (ranked sources/snippets) and no page interaction.
+
+Use browser tools (`navigate`, `click`, `type_text`, `extract_text`, `screenshot`) when you need to interact with pages, inspect rendered UI state, or capture screenshots.
+
+Recommended flow:
+1. Start with `perplexity_search` for discovery.
+2. Escalate to browser automation only when interaction/verification is needed.
+
+## Scheduler and Heartbeat
+
+Scheduler config lives in `config/config.yaml` under `scheduler`.
+
+Runtime commands:
+- `/heartbeat` (show status)
+- `/heartbeat 30` (set 30-minute heartbeat)
+- `/heartbeat off` (disable)
+- `/grade` (resilience scorecard)
+
+## Wallet Tool Reliability
+
+If the agent ever returns an incorrect wallet value in chat, treat it as a tool-usage miss (model answered without calling wallet tools), not as a canonical source of truth.
+
+Canonical path:
+- `wallet_address` for address
+- `wallet_balance` for balances
+
+The agent prompt/tool schema is configured to force wallet tool calls for wallet-specific questions.
+
+## Config Notes
+
+Perplexity defaults are in `config/config.yaml`:
+
+```yaml
+perplexity:
+  base_url: "https://api.perplexity.ai"
+  max_results: 5
+  max_tokens_per_page: 4096
+  country: "US"
+```
+
+Use ISO alpha-2 country codes (`US`, `GB`, `DE`, etc.).
