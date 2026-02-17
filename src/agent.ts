@@ -38,10 +38,12 @@ Guidelines:
 - When browsing, always use full URLs (https://) and extract_text after navigating.
 - Prefer perplexity_search for fast real-time web lookup before full browser automation.
 - Use search_google when you need raw SERP behavior from Google specifically.
+- For "what's today's date/time" or other local time/date questions, answer from Runtime Time Context and do not use web search tools.
 - For any wallet-specific question (address, balance, token holdings, tx hash), ALWAYS call the corresponding wallet tool first. Never guess or reuse a previously stated wallet value without re-checking.
 - For heartbeat scheduling requests, use heartbeat_status / heartbeat_set / heartbeat_disable tools instead of telling the user to edit config files.
 - In Telegram runtime, critical intents may be routed deterministically (update/wallet/balance) before LLM planning; align with those direct tool-backed paths.
 - Shell commands (run_command) may require user approval depending on the current permission mode.
+- If the user asks you to perform a tool-capable action, execute it in the same turn and return the result. Do not send placeholder responses like "I'll check" without actually running the tool.
 - Be concise. Summarize findings clearly.
 - If a tool call fails, try an alternative approach before giving up.
 - Reference any user preferences or known facts from your memory when relevant.
@@ -182,6 +184,15 @@ function needsGoogleSerp(userText: string): boolean {
 }
 
 function getToolRoutingHintContext(userText: string): string {
+    if (isLocalDateTimeQuery(userText)) {
+        return [
+            "## Tool Routing Hint (Current Request)",
+            "- Do not use web search for this request.",
+            "- Reason: this is a local date/time question and Runtime Time Context is authoritative.",
+            "- Answer directly from runtime clock context.",
+        ].join("\n");
+    }
+
     if (needsGoogleSerp(userText)) {
         return [
             "## Tool Routing Hint (Current Request)",
@@ -311,8 +322,39 @@ function detectWalletGuardIntent(userText: string): "wallet_address" | "wallet_b
     return null;
 }
 
+function isLocalDateTimeQuery(userText: string): boolean {
+    const t = userText.toLowerCase().trim();
+    const asksDateOrTime =
+        t.includes("today's date") ||
+        t.includes("todays date") ||
+        t.includes("current date") ||
+        t.includes("current time") ||
+        t.includes("what day is it") ||
+        /\bwhat(?:'s| is)\s+(?:the\s+)?(?:date|time)\b/.test(t) ||
+        /\bdate\s+today\b/.test(t);
+
+    if (!asksDateOrTime) return false;
+
+    const externalTopicSignals = [
+        "btc",
+        "bitcoin",
+        "stock",
+        "price",
+        "market",
+        "news",
+        "weather",
+        "score",
+        "nba",
+        "nfl",
+        "wallet",
+        "eth",
+    ];
+    return !externalTopicSignals.some((s) => t.includes(s));
+}
+
 function needsRealtimeSearchVerification(userText: string): boolean {
     const t = userText.toLowerCase();
+    if (isLocalDateTimeQuery(t)) return false;
     const realtimeSignals = [
         "latest",
         "today",
@@ -336,6 +378,47 @@ function claimsPerplexityUsage(text: string): boolean {
         t.includes("from perplexity") ||
         t.includes("using perplexity")
     );
+}
+
+async function rewriteReplyWithLiveSearch(
+    userText: string,
+    draftReply: string,
+    liveSearchOutput: string
+): Promise<string> {
+    const prompt = [
+        "Revise the assistant reply using verified live-search results.",
+        "Return only the final user-facing answer.",
+        "Rules:",
+        "- Do not mention tools, traces, or internal verification.",
+        "- Do not include raw URLs unless the user explicitly asked for links.",
+        "- Keep it concise and directly answer the user.",
+        "",
+        "User request:",
+        userText,
+        "",
+        "Draft reply:",
+        draftReply || "(empty)",
+        "",
+        "Verified live-search results:",
+        liveSearchOutput,
+    ].join("\n");
+
+    try {
+        const completion = await agentCompletionExecutor.execute(
+            "agent:live_search_rewrite",
+            () =>
+                client.chat.completions.create({
+                    model: config.model,
+                    messages: [{ role: "user", content: prompt }],
+                    temperature: 0.2,
+                    max_tokens: 450,
+                })
+        );
+        const revised = completion.choices[0]?.message?.content?.trim();
+        return revised || draftReply;
+    } catch {
+        return draftReply;
+    }
 }
 
 function needsExecutionPlan(userText: string): boolean {
@@ -494,7 +577,6 @@ export async function runAgent(
     const realtimeGuard = needsRealtimeSearchVerification(textContent);
     let realtimeSearchToolCalledInTurn = false;
     let perplexityCalledInTurn = false;
-    const calledToolNames = new Set<string>();
     let completedPlanSteps = 0;
 
     // Tool-call loop — keep going until the model returns a text response
@@ -569,7 +651,6 @@ export async function runAgent(
             if (toolCalls.some((tc) => tc.function.name.startsWith("wallet_"))) {
                 walletToolCalledInTurn = true;
             }
-            for (const tc of toolCalls) calledToolNames.add(tc.function.name);
             if (toolCalls.some((tc) =>
                 tc.function.name === "perplexity_search" ||
                 tc.function.name === "search_google" ||
@@ -618,27 +699,25 @@ export async function runAgent(
                         query: textContent,
                         max_results: 5,
                     });
-                    calledToolNames.add("perplexity_search");
                     perplexityCalledInTurn = true;
-                    reply = `${reply}\n\n(Verified via perplexity_search)\n${guarded}`;
+                    reply = await rewriteReplyWithLiveSearch(textContent, reply, guarded);
                 } catch {
-                    reply += "\n\n(No live search tool call was successfully executed for this real-time query.)";
+                    // Keep draft reply if fallback search verification fails.
                 }
             }
 
             // Integrity guard: if the assistant claims Perplexity usage without an in-turn call,
-            // force an actual call and append the raw tool-backed output.
+            // force an actual call and silently rewrite the reply from verified results.
             if (claimsPerplexityUsage(reply) && !perplexityCalledInTurn) {
                 try {
                     const guarded = await AVAILABLE_TOOLS.perplexity_search({
                         query: textContent,
                         max_results: 5,
                     });
-                    calledToolNames.add("perplexity_search");
                     perplexityCalledInTurn = true;
-                    reply += `\n\n(Tool integrity correction: Perplexity was mentioned without an executed call. Verified now via perplexity_search)\n${guarded}`;
+                    reply = await rewriteReplyWithLiveSearch(textContent, reply, guarded);
                 } catch {
-                    reply += "\n\n(Tool integrity correction failed: perplexity_search execution failed.)";
+                    // Keep original reply if correction call fails.
                 }
             }
 
@@ -648,10 +727,6 @@ export async function runAgent(
                     return `${done ? "[done]" : "[pending]"} ${i + 1}. ${step}`;
                 });
                 reply += `\n\nPlan status:\n${statusLines.join("\n")}`;
-            }
-
-            if (calledToolNames.size > 0) {
-                reply += `\n\nTools executed this turn: ${Array.from(calledToolNames).join(", ")}`;
             }
 
             const updatedHistory: Message[] = [

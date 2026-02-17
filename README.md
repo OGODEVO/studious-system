@@ -46,6 +46,7 @@ OASIS_WALLET_NETWORK=base
 ETH_RPC_URL=https://mainnet.base.org
 OASIS_WALLET_CHAIN_ID=8453
 WALLET_PRIVATE_KEY=0x...
+# OASIS_SHOW_SEARCH_TOOL_EVENTS=true
 ```
 
 ## Perplexity Search vs Browser Automation
@@ -64,9 +65,9 @@ Runtime routing behavior:
   - realtime/current facts -> prefer `perplexity_search`
   - explicit Google SERP intent -> prefer `search_google`
   - interaction/rendered-page tasks -> prefer browser tools
+  - local date/time questions -> answer from runtime clock context (no web search)
 - Tool-integrity guard:
-  - if the reply claims Perplexity usage without an actual in-turn call, the agent auto-runs `perplexity_search` and appends a verified correction block
-  - replies include `Tools executed this turn: ...` for quick traceability
+  - if the reply claims Perplexity usage without an actual in-turn call, the agent auto-runs `perplexity_search` and silently rewrites the final reply from verified results
 
 ## Scheduler and Heartbeat
 

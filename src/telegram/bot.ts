@@ -28,6 +28,8 @@ if (!BOT_TOKEN) {
 }
 
 const bot = new Telegraf(BOT_TOKEN);
+const SEARCH_TRACE_TOOLS = new Set(["perplexity_search", "search_google"]);
+const SHOW_SEARCH_TOOL_EVENTS = process.env.OASIS_SHOW_SEARCH_TOOL_EVENTS === "true";
 
 // ---------------------------------------------------------------------------
 // Approval Implementation
@@ -73,6 +75,17 @@ class TelegramApproval implements ApprovalInterface {
             resolve(decision);
             this.pendingReqs.delete(reqId);
         }
+    }
+
+    hasPending(): boolean {
+        return this.pendingReqs.size > 0;
+    }
+
+    resolveLatest(decision: ApprovalDecision): boolean {
+        const latestReqId = Array.from(this.pendingReqs.keys()).at(-1);
+        if (!latestReqId) return false;
+        this.resolveReq(latestReqId, decision);
+        return true;
     }
 }
 
@@ -505,6 +518,38 @@ bot.on(message("text"), async (ctx) => {
     const text = ctx.message.text;
     if (text.startsWith("/")) return;
 
+    const normalized = text.trim().toLowerCase();
+    const canonical = normalized.replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+    if (tgApproval.hasPending()) {
+        const allowOnce = new Set(["approve", "approved", "yes", "y", "allow", "ok"]);
+        const allowAll = new Set(["allow all", "always allow", "approve all"]);
+        const deny = new Set(["deny", "no", "n", "cancel", "reject"]);
+
+        if (allowAll.has(canonical)) {
+            const resolved = tgApproval.resolveLatest("ALLOW_ALL");
+            if (resolved) {
+                await ctx.reply("✅ Approved.");
+                return;
+            }
+        }
+
+        if (allowOnce.has(canonical)) {
+            const resolved = tgApproval.resolveLatest("ALLOW");
+            if (resolved) {
+                await ctx.reply("✅ Approved.");
+                return;
+            }
+        }
+
+        if (deny.has(canonical)) {
+            const resolved = tgApproval.resolveLatest("DENY");
+            if (resolved) {
+                await ctx.reply("🛑 Denied.");
+                return;
+            }
+        }
+    }
+
     // Fire-and-forget — don't block Telegraf's middleware
     processAndReply(ctx, text);
 });
@@ -524,17 +569,19 @@ async function main() {
     if (ALLOWED_CHAT_ID) {
         const chatId = ALLOWED_CHAT_ID;
         agentBus.on("tool:start", (evt: ToolStartEvent) => {
+            const isSearch = SEARCH_TRACE_TOOLS.has(evt.tool);
+            if (isSearch && !SHOW_SEARCH_TOOL_EVENTS) return;
             bot.telegram.sendMessage(chatId, evt.label, { parse_mode: "HTML" }).catch(() => { });
             bot.telegram.sendChatAction(chatId, "typing").catch(() => { });
         });
         agentBus.on("tool:end", (evt: ToolEndEvent) => {
-            // High-trust trace for financial/search tools so outputs are verifiable in chat.
-            const traceTools = new Set(["perplexity_search", "search_google"]);
+            // Wallet traces stay visible by default; search traces are opt-in to keep UI clean.
             const isWallet = evt.tool.startsWith("wallet_");
-            const shouldTrace = isWallet || traceTools.has(evt.tool);
+            const isSearch = SEARCH_TRACE_TOOLS.has(evt.tool);
+            const shouldTrace = isWallet || (SHOW_SEARCH_TOOL_EVENTS && isSearch);
             if (!shouldTrace) return;
             const state = evt.success ? "✅" : "❌";
-            const preview = evt.outputPreview ? `\n${evt.outputPreview}` : "";
+            const preview = isWallet && evt.outputPreview ? `\n${evt.outputPreview}` : "";
             bot.telegram
                 .sendMessage(chatId, `${state} ${evt.tool} finished in ${evt.durationMs}ms${preview}`)
                 .catch(() => { });
