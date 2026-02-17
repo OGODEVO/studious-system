@@ -69,6 +69,11 @@ interface OasisConfig {
         max_tokens_per_page?: number;
         country?: string;
     };
+    wallet?: {
+        network?: string;
+        rpc_url?: string;
+        expected_chain_id?: number;
+    };
 }
 
 function loadYamlConfig(): OasisConfig {
@@ -95,6 +100,15 @@ const envKeyName = activeProvider
     ? `${activeProvider.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}_API_KEY`
     : "OPENAI_API_KEY";
 const envKey = process.env[envKeyName];
+const walletExpectedChainIdRaw =
+    process.env.OASIS_WALLET_CHAIN_ID ??
+    (yamlConfig.wallet?.expected_chain_id !== undefined
+        ? String(yamlConfig.wallet.expected_chain_id)
+        : "");
+const walletExpectedChainId =
+    walletExpectedChainIdRaw && Number.isFinite(Number(walletExpectedChainIdRaw))
+        ? Number(walletExpectedChainIdRaw)
+        : undefined;
 
 export const config = {
     // Secrets from .env or YAML
@@ -161,6 +175,11 @@ export const config = {
     perplexityMaxResults: yamlConfig.perplexity?.max_results ?? 5,
     perplexityMaxTokensPerPage: yamlConfig.perplexity?.max_tokens_per_page ?? 4096,
     perplexityCountry: yamlConfig.perplexity?.country ?? "US",
+
+    // Wallet network/rpc
+    walletNetwork: (process.env.OASIS_WALLET_NETWORK || yamlConfig.wallet?.network || "base").toLowerCase(),
+    walletRpcUrl: process.env.ETH_RPC_URL || yamlConfig.wallet?.rpc_url || "",
+    walletExpectedChainId,
 } as const;
 
 if (!config.openaiKey) {

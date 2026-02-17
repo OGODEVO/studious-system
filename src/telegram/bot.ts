@@ -8,7 +8,7 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import { ApprovalInterface, ApprovalDecision } from "../utils/approval.js";
 import { agentBus, type ToolStartEvent, type ToolEndEvent } from "../utils/events.js";
-import { runAgent, type Message } from "../agent.js";
+import { runAgent, type Message, type PlanningMode } from "../agent.js";
 import { setApprovalInterface, setGlobalAllow, getGlobalAllowStatus } from "../tools/shell.js";
 import { getAddress, getBalance, getNetworkStatus, getTransactionStatus } from "../tools/wallet.js";
 import { startScheduler, stopScheduler, pushSchedulerHistory } from "../runtime/scheduler.js";
@@ -127,6 +127,7 @@ bot.command("start", (ctx) => {
         "Send me text, photos, or documents\\.\n\n" +
         "*Commands:*\n" +
         "/status \\- Check permission status\n" +
+        "/mode <fast|auto|autonomous> \\- Set planning mode\n" +
         "/wallet \\- Show agent wallet address\n" +
         "/balance \\- Show ETH balance\n" +
         "/balance <token_address> \\- Show ERC\\-20 balance\n" +
@@ -150,6 +151,26 @@ bot.command("status", (ctx) => {
     ctx.reply(isFree
         ? "🔓 Status: UNLOCKED (All commands allowed)"
         : "🔒 Status: SECURE (Approval required)");
+});
+
+bot.command("mode", async (ctx) => {
+    if (!authCheck(ctx.chat.id.toString())) { ctx.reply("⛔️ Unauthorized."); return; }
+
+    const text = ctx.message.text || "";
+    const arg = text.split(" ").slice(1).join(" ").trim().toLowerCase();
+
+    if (!arg) {
+        await ctx.reply(`⚙️ Current mode: ${planningMode}\nUse: /mode fast | /mode auto | /mode autonomous`);
+        return;
+    }
+
+    if (arg !== "fast" && arg !== "auto" && arg !== "autonomous") {
+        await ctx.reply("Usage: /mode fast | /mode auto | /mode autonomous");
+        return;
+    }
+
+    planningMode = arg;
+    await ctx.reply(`⚙️ Mode set to: ${planningMode}`);
 });
 
 bot.command("wallet", async (ctx) => {
@@ -225,6 +246,7 @@ bot.command("reset", (ctx) => {
 // ---------------------------------------------------------------------------
 
 let isProcessing = false;
+let planningMode: PlanningMode = "auto";
 
 function authCheck(chatId: string): boolean {
     return !ALLOWED_CHAT_ID || chatId === ALLOWED_CHAT_ID;
@@ -269,8 +291,26 @@ async function routeDeterministicIntent(ctx: any, userContent: string | ChatComp
     const text = contentToText(userContent).toLowerCase();
     if (!text) return false;
 
+    if (/(^|\b)(switch to|set)(\s+)?autonomous mode(\b|$)/i.test(text)) {
+        planningMode = "autonomous";
+        await ctx.reply("⚙️ Mode set to: autonomous");
+        return true;
+    }
+
+    if (/(^|\b)(switch to|set)(\s+)?fast mode(\b|$)/i.test(text)) {
+        planningMode = "fast";
+        await ctx.reply("⚙️ Mode set to: fast");
+        return true;
+    }
+
+    if (/(^|\b)(switch to|set)(\s+)?auto mode(\b|$)/i.test(text)) {
+        planningMode = "auto";
+        await ctx.reply("⚙️ Mode set to: auto");
+        return true;
+    }
+
     const wantsUpdate =
-        /(^|\\b)(update yourself|self[- ]?update|update the agent|pull latest|update to latest|update now)(\\b|$)/i.test(text);
+        /(^|\b)(update yourself|self[- ]?update|update the agent|pull latest|update to latest|update now)(\b|$)/i.test(text);
     if (wantsUpdate) {
         await performUpdate(ctx);
         return true;
@@ -286,7 +326,7 @@ async function routeDeterministicIntent(ctx: any, userContent: string | ChatComp
 
     const wantsBalance =
         text.includes("wallet balance") ||
-        /\\b(balance|how much eth|eth balance)\\b/i.test(text);
+        /\b(balance|how much eth|eth balance)\b/i.test(text);
     if (wantsBalance) {
         await performBalance(ctx);
         return true;
@@ -303,23 +343,28 @@ async function processAndReply(ctx: any, userContent: string | ChatCompletionCon
     }
 
     isProcessing = true;
-    history.push({ role: "user", content: userContent });
-
-    // Cap history at 100 messages
-    while (history.length > 100) history.shift();
 
     await ctx.sendChatAction("typing");
 
     try {
         if (await routeDeterministicIntent(ctx, userContent)) {
+            history.push({ role: "user", content: userContent });
+            while (history.length > 100) history.shift();
             return;
         }
 
         const apiHistory = history.map(m => ({ role: m.role, content: m.content }));
-        const result = await runAgent(userContent, apiHistory as any);
+        const result = await runAgent(
+            userContent,
+            apiHistory as any,
+            undefined,
+            { planningMode }
+        );
 
+        history.push({ role: "user", content: userContent });
         history.push({ role: "assistant", content: result.reply });
         pushSchedulerHistory({ role: "assistant", content: result.reply });
+        while (history.length > 100) history.shift();
 
         if (result.reply.length > 4000) {
             const chunks = result.reply.match(/.{1,4000}/gs) || [result.reply];
@@ -483,8 +528,11 @@ async function main() {
             bot.telegram.sendChatAction(chatId, "typing").catch(() => { });
         });
         agentBus.on("tool:end", (evt: ToolEndEvent) => {
-            // High-trust trace for wallet tools so outputs are verifiable in chat.
-            if (!evt.tool.startsWith("wallet_")) return;
+            // High-trust trace for financial/search tools so outputs are verifiable in chat.
+            const traceTools = new Set(["perplexity_search", "search_google"]);
+            const isWallet = evt.tool.startsWith("wallet_");
+            const shouldTrace = isWallet || traceTools.has(evt.tool);
+            if (!shouldTrace) return;
             const state = evt.success ? "✅" : "❌";
             const preview = evt.outputPreview ? `\n${evt.outputPreview}` : "";
             bot.telegram

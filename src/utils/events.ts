@@ -27,6 +27,7 @@ const TOOL_LABELS: Record<string, (args: Record<string, unknown>) => string> = {
     screenshot: () => `📸 Taking screenshot…`,
     get_links: () => `🔗 Getting page links…`,
     search_google: (a) => `🔍 Searching: "${a.query}"…`,
+    perplexity_search: (a) => `🔎 Perplexity search: "${(a.query as string || "").slice(0, 80)}"…`,
     get_current_url: () => `📍 Getting current URL…`,
     run_command: (a) => `⚡ Running: \`${(a.command as string || "").slice(0, 60)}\`…`,
     heartbeat_status: () => `💓 Checking heartbeat status…`,

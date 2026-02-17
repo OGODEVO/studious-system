@@ -1,13 +1,46 @@
 import { ethers } from "ethers";
-import dotenv from "dotenv";
-dotenv.config();
+import { config } from "../utils/config.js";
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
-const RPC_URL = process.env.ETH_RPC_URL || "https://mainnet.base.org";
 const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || "";
+
+const NETWORK_PRESETS = {
+    base: {
+        chainId: 8453n,
+        rpcUrl: "https://mainnet.base.org",
+    },
+    ethereum: {
+        chainId: 1n,
+        rpcUrl: "https://ethereum-rpc.publicnode.com",
+    },
+} as const;
+
+type SupportedNetwork = keyof typeof NETWORK_PRESETS;
+
+function resolveWalletConfig(): {
+    network: SupportedNetwork;
+    expectedChainId: bigint;
+    rpcUrl: string;
+} {
+    const rawNetwork = String(config.walletNetwork || "base").toLowerCase();
+    const network: SupportedNetwork =
+        rawNetwork === "ethereum" ? "ethereum" : "base";
+
+    const preset = NETWORK_PRESETS[network];
+    const expectedChainId =
+        config.walletExpectedChainId !== undefined
+            ? BigInt(config.walletExpectedChainId)
+            : preset.chainId;
+    const rpcUrl = config.walletRpcUrl || preset.rpcUrl;
+
+    return { network, expectedChainId, rpcUrl };
+}
+
+const WALLET_CFG = resolveWalletConfig();
+const RPC_URL = WALLET_CFG.rpcUrl;
 
 let provider: ethers.JsonRpcProvider;
 let wallet: ethers.Wallet;
@@ -17,6 +50,17 @@ function ensureWallet() {
     if (!provider) provider = new ethers.JsonRpcProvider(RPC_URL);
     if (!wallet) wallet = new ethers.Wallet(PRIVATE_KEY, provider);
     return wallet;
+}
+
+async function ensureNetworkMatch(): Promise<ethers.Network> {
+    ensureWallet();
+    const network = await provider.getNetwork();
+    if (network.chainId !== WALLET_CFG.expectedChainId) {
+        throw new Error(
+            `Wallet network mismatch: configured=${WALLET_CFG.network} expectedChainId=${WALLET_CFG.expectedChainId.toString()} actualChainId=${network.chainId.toString()} rpc=${RPC_URL}`
+        );
+    }
+    return network;
 }
 
 // ---------------------------------------------------------------------------
@@ -32,6 +76,7 @@ export async function getAddress(): Promise<string> {
 /** Returns ETH balance (or ERC-20 balance if token address provided) */
 export async function getBalance(tokenAddress?: string): Promise<string> {
     const w = ensureWallet();
+    const network = await ensureNetworkMatch();
 
     if (tokenAddress) {
         const erc20 = new ethers.Contract(
@@ -44,19 +89,17 @@ export async function getBalance(tokenAddress?: string): Promise<string> {
             erc20.symbol(),
             erc20.decimals(),
         ]);
-        return `${ethers.formatUnits(balance, decimals)} ${symbol}`;
+        return `${ethers.formatUnits(balance, decimals)} ${symbol} (network=${WALLET_CFG.network} chainId=${network.chainId.toString()} rpc=${RPC_URL})`;
     }
 
     const balance = await provider.getBalance(w.address);
-    const network = await provider.getNetwork();
-    return `${ethers.formatEther(balance)} ETH (chainId=${network.chainId.toString()}, rpc=${RPC_URL})`;
+    return `${ethers.formatEther(balance)} ETH (network=${WALLET_CFG.network} chainId=${network.chainId.toString()} rpc=${RPC_URL})`;
 }
 
 export async function getNetworkStatus(): Promise<string> {
-    ensureWallet();
-    const network = await provider.getNetwork();
+    const network = await ensureNetworkMatch();
     const latest = await provider.getBlockNumber();
-    return `chainId=${network.chainId.toString()} block=${latest} rpc=${RPC_URL}`;
+    return `network=${WALLET_CFG.network} chainId=${network.chainId.toString()} expectedChainId=${WALLET_CFG.expectedChainId.toString()} block=${latest} rpc=${RPC_URL}`;
 }
 
 export async function getTransactionStatus(txHash: string): Promise<string> {
@@ -67,13 +110,13 @@ export async function getTransactionStatus(txHash: string): Promise<string> {
     }
 
     const [network, tx, receipt] = await Promise.all([
-        provider.getNetwork(),
+        ensureNetworkMatch(),
         provider.getTransaction(hash),
         provider.getTransactionReceipt(hash),
     ]);
 
     if (!tx) {
-        return `Not found on configured RPC. chainId=${network.chainId.toString()} rpc=${RPC_URL}`;
+        return `Not found on configured RPC. network=${WALLET_CFG.network} chainId=${network.chainId.toString()} rpc=${RPC_URL}`;
     }
 
     const valueEth = ethers.formatEther(tx.value);
@@ -87,6 +130,7 @@ export async function getTransactionStatus(txHash: string): Promise<string> {
 
     return [
         `hash=${hash}`,
+        `network=${WALLET_CFG.network}`,
         `chainId=${network.chainId.toString()}`,
         `rpc=${RPC_URL}`,
         `status=${status}`,
@@ -104,6 +148,7 @@ export async function sendTransaction(
     tokenAddress?: string
 ): Promise<string> {
     const w = ensureWallet();
+    await ensureNetworkMatch();
 
     if (tokenAddress) {
         const erc20 = new ethers.Contract(
@@ -142,6 +187,7 @@ export async function callContract(
     value?: string
 ): Promise<string> {
     const w = ensureWallet();
+    await ensureNetworkMatch();
     const parsedAbi = JSON.parse(abi);
     const contract = new ethers.Contract(contractAddress, parsedAbi, w);
 

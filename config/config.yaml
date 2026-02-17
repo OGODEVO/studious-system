@@ -32,6 +32,11 @@ perplexity:
   max_tokens_per_page: 4096
   country: "US"
 
+wallet:
+  network: "base"                 # base | ethereum
+  rpc_url: ""                     # optional override (preferred via ETH_RPC_URL in .env)
+  expected_chain_id: 8453         # Base mainnet
+
 memory:
   extraction_model: "gpt-5-mini"             # any OpenAI v1-compatible model
   extraction_base_url: ""                      # leave empty for OpenAI, or set e.g. "https://api.novita.ai/v3/openai"
