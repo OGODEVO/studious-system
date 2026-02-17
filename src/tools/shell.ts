@@ -1,6 +1,7 @@
 import { exec } from "child_process";
 import { promisify } from "util";
 import { CLIApproval, ApprovalInterface } from "../utils/approval.js";
+import { saveSession } from "../utils/context.js";
 
 const execAsync = promisify(exec);
 
@@ -92,5 +93,26 @@ export async function runCommand(args: { command: string }): Promise<string> {
         return output || "(no output)";
     } catch (err: any) {
         return `Error executing command: ${err.message}`;
+    }
+}
+
+export async function selfUpdate(): Promise<string> {
+    console.log("🔄 Self-update initiated via tool...");
+    try {
+        const { stdout } = await execAsync("git pull");
+        if (stdout.includes("Already up to date")) {
+            return "✅ Already up to date.";
+        }
+
+        await execAsync("npm install");
+
+        saveSession();
+
+        // Return response so agent knows what happened, then exit
+        setTimeout(() => process.exit(0), 1000);
+
+        return `⬇️  Updates applied:\n${stdout}\n\n♻️  Restarting agent...`;
+    } catch (err: any) {
+        return `❌ Update failed: ${err.message}`;
     }
 }

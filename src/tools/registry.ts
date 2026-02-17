@@ -9,7 +9,7 @@ import {
     searchGoogle,
     getCurrentUrl,
 } from "./browser.js";
-import { runCommand } from "./shell.js";
+import { runCommand, selfUpdate } from "./shell.js";
 
 // ---------------------------------------------------------------------------
 // Schema — exposed to OpenAI function calling
@@ -129,6 +129,14 @@ export const TOOLS_SCHEMA: ChatCompletionTool[] = [
             },
         },
     },
+    {
+        type: "function",
+        function: {
+            name: "self_update",
+            description: "Updates the agent's code from the git repository, installs dependencies, and restarts the process. Use when the user asks to update.",
+            parameters: { type: "object", properties: {} },
+        },
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -147,4 +155,5 @@ export const AVAILABLE_TOOLS: Record<string, ToolFn> = {
     search_google: (a) => searchGoogle(a as { query: string }),
     get_current_url: () => getCurrentUrl(),
     run_command: (a) => runCommand(a as { command: string }),
+    self_update: () => selfUpdate(),
 };

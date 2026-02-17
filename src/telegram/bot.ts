@@ -11,6 +11,7 @@ import { agentBus, type ToolStartEvent } from "../utils/events.js";
 import { runAgent, type Message } from "../agent.js";
 import { setApprovalInterface, setGlobalAllow, getGlobalAllowStatus } from "../tools/shell.js";
 import { startScheduler, stopScheduler, pushSchedulerHistory } from "../runtime/scheduler.js";
+import { history, saveSession, loadSession } from "../utils/context.js";
 
 config();
 const execAsync = promisify(exec);
@@ -141,11 +142,34 @@ bot.command("status", (ctx) => {
         : "🔒 Status: SECURE (Approval required)");
 });
 
+bot.command("update", async (ctx) => {
+    if (!authCheck(ctx.chat.id.toString())) { ctx.reply("⛔️ Unauthorized."); return; }
+
+    await ctx.reply("🔄 Checking for updates...");
+
+    try {
+        const { stdout } = await execAsync("git pull");
+
+        if (stdout.includes("Already up to date")) {
+            await ctx.reply("✅ Already up to date.");
+            return;
+        }
+
+        await ctx.reply(`⬇️ Updates found:\n<pre>${stdout}</pre>\n\n📦 Installing dependencies...`, { parse_mode: "HTML" });
+        await execAsync("npm install");
+
+        await ctx.reply("♻️ Restarting to apply changes...");
+        saveSession();
+        process.exit(0); // PM2 will restart us
+    } catch (err) {
+        await ctx.reply(`❌ Update failed: ${(err as Error).message}`);
+    }
+});
+
 // ---------------------------------------------------------------------------
 // Shared State & Helpers
 // ---------------------------------------------------------------------------
 
-const history: Message[] = [];
 let isProcessing = false;
 
 function authCheck(chatId: string): boolean {
@@ -310,6 +334,7 @@ bot.on(message("text"), async (ctx) => {
 async function main() {
     console.log("🚀 Starting Oasis Telegram Bot…");
 
+    loadSession(); // Restore chat history
     startScheduler();
 
     // Subscribe to tool events — send live status to Telegram
@@ -328,8 +353,8 @@ async function main() {
         }
     });
 
-    process.once("SIGINT", () => { bot.stop("SIGINT"); stopScheduler(); });
-    process.once("SIGTERM", () => { bot.stop("SIGTERM"); stopScheduler(); });
+    process.once("SIGINT", () => { bot.stop("SIGINT"); stopScheduler(); saveSession(); });
+    process.once("SIGTERM", () => { bot.stop("SIGTERM"); stopScheduler(); saveSession(); });
 }
 
 main();
