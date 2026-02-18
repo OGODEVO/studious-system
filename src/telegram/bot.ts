@@ -316,8 +316,16 @@ function extractAmount(text: string): string | undefined {
 
     if (/\b(max|all|maximum)\b/i.test(canonical)) return "max";
 
-    const amountMatch = canonical.match(/(\d+(?:\.\d+)?)(?:\s*eth)?\b/i);
-    return amountMatch?.[1];
+    // Accept numeric amount only when explicitly provided:
+    // - "<amount> eth" inside a sentence, or
+    // - amount-only message like "0.005"
+    const withUnit = canonical.match(/(?:^|\s)(\d+(?:\.\d+)?)\s*eth(?:\s|$)/i);
+    if (withUnit) return withUnit[1];
+
+    const amountOnly = canonical.match(/^(\d+(?:\.\d+)?)$/);
+    if (amountOnly) return amountOnly[1];
+
+    return undefined;
 }
 
 function isEthSendIntent(text: string): boolean {
