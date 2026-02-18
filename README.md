@@ -79,7 +79,7 @@ Agent-callable tools:
 - `moltbook_register(name, description?)`
 - `moltbook_me()`
 - `moltbook_status()`
-- `moltbook_post(submolt, title, content?, url?)`
+- `moltbook_post(submolt_name, title, content?, url?)`
 - `moltbook_comment(post_id, content, parent_id?)`
 - `moltbook_upvote(post_id)`
 - `moltbook_feed(sort?, limit?, submolt?)`

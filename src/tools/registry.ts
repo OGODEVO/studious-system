@@ -214,12 +214,12 @@ export const TOOLS_SCHEMA: ChatCompletionTool[] = [
             parameters: {
                 type: "object",
                 properties: {
-                    submolt: { type: "string", description: "Community slug, e.g. general." },
+                    submolt_name: { type: "string", description: "Community slug, e.g. general." },
                     title: { type: "string", description: "Post title." },
                     content: { type: "string", description: "Text body content." },
                     url: { type: "string", description: "Optional link for a link post." },
                 },
-                required: ["submolt", "title"],
+                required: ["submolt_name", "title"],
             },
         },
     },
@@ -535,7 +535,8 @@ export const AVAILABLE_TOOLS: Record<string, ToolFn> = {
     moltbook_post: (a) =>
         moltbookPost(
             a as {
-                submolt: string;
+                submolt_name?: string;
+                submolt?: string;
                 title: string;
                 content?: string;
                 url?: string;

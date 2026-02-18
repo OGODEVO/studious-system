@@ -455,15 +455,16 @@ function parseMoltbookRoute(userText: string): DeterministicToolRoute | null {
         };
     }
     if (/\bmoltbook\b.*\bpost\b/.test(t)) {
-        const submolt = extractFieldValue(userText, "submolt");
+        const submoltName = extractFieldValue(userText, "submolt_name") ??
+            extractFieldValue(userText, "submolt");
         const title = extractFieldValue(userText, "title");
         const content = extractFieldValue(userText, "content");
         const url = extractFieldValue(userText, "url");
-        if (!submolt || !title || (!content && !url)) return null;
+        if (!submoltName || !title || (!content && !url)) return null;
         return {
             tool: "moltbook_post",
             args: {
-                submolt,
+                submolt_name: submoltName,
                 title,
                 ...(content ? { content } : {}),
                 ...(url ? { url } : {}),

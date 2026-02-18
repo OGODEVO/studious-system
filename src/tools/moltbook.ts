@@ -10,7 +10,8 @@ interface MoltbookRegisterArgs {
 }
 
 interface MoltbookPostArgs {
-    submolt: string;
+    submolt_name?: string;
+    submolt?: string; // backward compatibility
     title: string;
     content?: string;
     url?: string;
@@ -175,12 +176,12 @@ export async function moltbookStatus(): Promise<string> {
 }
 
 export async function moltbookPost(args: MoltbookPostArgs): Promise<string> {
-    const submolt = (args.submolt || "").trim();
+    const submoltName = (args.submolt_name || args.submolt || "").trim();
     const title = (args.title || "").trim();
     const content = (args.content || "").trim();
     const rawUrl = (args.url || "").trim();
 
-    if (!submolt) return "Error: submolt is required.";
+    if (!submoltName) return "Error: submolt_name is required.";
     if (!title) return "Error: title is required.";
     if (!content && !rawUrl) return "Error: provide content or url.";
 
@@ -199,7 +200,7 @@ export async function moltbookPost(args: MoltbookPostArgs): Promise<string> {
 
     const payload = await moltbookRequest("POST", "/posts", {
         body: {
-            submolt,
+            submolt_name: submoltName,
             title,
             ...(content ? { content } : {}),
             ...(safeUrl ? { url: safeUrl } : {}),

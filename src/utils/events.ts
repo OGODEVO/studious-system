@@ -32,7 +32,7 @@ const TOOL_LABELS: Record<string, (args: Record<string, unknown>) => string> = {
     moltbook_register: (a) => `🦞 Moltbook register: "${(a.name as string || "").slice(0, 40)}"…`,
     moltbook_me: () => `🦞 Fetching Moltbook profile…`,
     moltbook_status: () => `🦞 Checking Moltbook claim status…`,
-    moltbook_post: (a) => `🦞 Posting to r/${(a.submolt as string || "general")}…`,
+    moltbook_post: (a) => `🦞 Posting to r/${(a.submolt_name as string || a.submolt as string || "general")}…`,
     moltbook_comment: (a) => `🦞 Commenting on post ${(a.post_id as string || "").slice(0, 16)}…`,
     moltbook_upvote: (a) => `🦞 Upvoting post ${(a.post_id as string || "").slice(0, 16)}…`,
     moltbook_feed: (a) => `🦞 Reading Moltbook feed (${(a.sort as string || "hot")})…`,
