@@ -1,6 +1,6 @@
 # Oasis Agent
 
-Autonomous agent runtime with:
+Autonomous agent runtime with:.
 - browser automation (Playwright)
 - real-time search (Perplexity Search API)
 - queue lanes + scheduler/heartbeat
