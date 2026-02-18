@@ -681,6 +681,66 @@ function claimsSchedulerAction(text: string): boolean {
     );
 }
 
+function isPromiseWithoutAction(text: string): boolean {
+    const t = text.toLowerCase();
+    const promiseSignals = [
+        "i'll",
+        "i will",
+        "let me",
+        "i can check",
+        "i can do that",
+        "i'm going to",
+        "i will now",
+    ];
+    const actionSignals = [
+        "check",
+        "pull",
+        "update",
+        "search",
+        "browse",
+        "send",
+        "post",
+        "comment",
+        "upvote",
+        "schedule",
+        "set",
+        "run",
+        "fetch",
+    ];
+    const hasPromise = promiseSignals.some((s) => t.includes(s));
+    const hasAction = actionSignals.some((s) => t.includes(s));
+    return hasPromise && hasAction;
+}
+
+function isLikelyToolCapableRequest(userText: string): boolean {
+    const t = userText.toLowerCase();
+    const signals = [
+        "wallet",
+        "balance",
+        "address",
+        "send",
+        "transfer",
+        "search",
+        "latest",
+        "price",
+        "news",
+        "browse",
+        "open",
+        "navigate",
+        "moltbook",
+        "post",
+        "comment",
+        "upvote",
+        "heartbeat",
+        "reminder",
+        "schedule",
+        "update",
+        "pull",
+        "run command",
+    ];
+    return signals.some((s) => t.includes(s));
+}
+
 async function rewriteReplyWithLiveSearch(
     userText: string,
     draftReply: string,
@@ -958,6 +1018,8 @@ export async function runAgent(
     const realtimeGuard = needsRealtimeSearchVerification(textContent);
     let realtimeSearchToolCalledInTurn = false;
     let perplexityCalledInTurn = false;
+    let anyToolCalledInTurn = false;
+    let actionRecoveryRetries = 0;
     let completedPlanSteps = 0;
 
     // Tool-call loop — keep going until the model returns a text response
@@ -1029,6 +1091,7 @@ export async function runAgent(
                     arguments: tc.arguments,
                 },
             }));
+            anyToolCalledInTurn = true;
             if (toolCalls.some((tc) => tc.function.name.startsWith("wallet_"))) {
                 walletToolCalledInTurn = true;
             }
@@ -1077,6 +1140,7 @@ export async function runAgent(
             if (walletGuardIntent && !walletToolCalledInTurn) {
                 try {
                     const guarded = await AVAILABLE_TOOLS[walletGuardIntent]({});
+                    anyToolCalledInTurn = true;
                     reply = `${guarded}\n\n${reply}`;
                 } catch {
                     // Keep model reply if guard call fails unexpectedly.
@@ -1089,6 +1153,7 @@ export async function runAgent(
                         query: textContent,
                         max_results: 5,
                     });
+                    anyToolCalledInTurn = true;
                     perplexityCalledInTurn = true;
                     reply = await rewriteReplyWithLiveSearch(textContent, reply, guarded);
                 } catch {
@@ -1104,6 +1169,7 @@ export async function runAgent(
                         query: textContent,
                         max_results: 5,
                     });
+                    anyToolCalledInTurn = true;
                     perplexityCalledInTurn = true;
                     reply = await rewriteReplyWithLiveSearch(textContent, reply, guarded);
                 } catch {
@@ -1119,6 +1185,7 @@ export async function runAgent(
                     if (route) {
                         const guarded = await executeSingleTool(route.tool, route.args);
                         reply = `${guarded}\n\n${reply}`;
+                        anyToolCalledInTurn = true;
                         moltbookToolCalledInTurn = true;
                     }
                 } catch {
@@ -1134,11 +1201,33 @@ export async function runAgent(
                     if (route) {
                         const guarded = await executeSingleTool(route.tool, route.args);
                         reply = `${guarded}\n\n${reply}`;
+                        anyToolCalledInTurn = true;
                         schedulerToolCalledInTurn = true;
                     }
                 } catch {
                     // Keep original reply on guard failure.
                 }
+            }
+
+            const shouldRecoverAction =
+                isLikelyToolCapableRequest(textContent) &&
+                !anyToolCalledInTurn &&
+                isPromiseWithoutAction(reply) &&
+                !reply.trim().toUpperCase().startsWith("BLOCKED:");
+
+            if (shouldRecoverAction && actionRecoveryRetries < 2) {
+                actionRecoveryRetries += 1;
+                messages.push({ role: "assistant", content: reply });
+                messages.push({
+                    role: "user",
+                    content: [
+                        "SYSTEM OVERRIDE:",
+                        "You promised an action but no tool was executed in this turn.",
+                        "Call the correct tool now.",
+                        "If execution is truly impossible, reply exactly as: BLOCKED: <reason>",
+                    ].join("\n"),
+                });
+                continue;
             }
 
             if (executionPlan && executionPlan.steps.length > 0) {
