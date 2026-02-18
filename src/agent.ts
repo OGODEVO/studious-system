@@ -331,12 +331,29 @@ async function executeToolCalls(
 function detectWalletGuardIntent(userText: string): "wallet_address" | "wallet_balance" | null {
     const t = userText.toLowerCase();
     const walletish =
-        t.includes("wallet") || t.includes("address") || t.includes("balance") || t.includes("eth");
+        t.includes("wallet") ||
+        t.includes("address") ||
+        t.includes("balance") ||
+        t.includes("bal") ||
+        t.includes("eth");
     if (!walletish) return null;
 
-    if (t.includes("address")) return "wallet_address";
-    if (t.includes("balance") || t.includes("how much")) return "wallet_balance";
-    return null;
+    const asksAddress =
+        /\baddress\b/.test(t) ||
+        /\bwhat(?:'s| is)\s+your\s+wallet\b/.test(t);
+    if (asksAddress) return "wallet_address";
+
+    const asksBalance =
+        /\bbalance\b/.test(t) ||
+        /\bbal\b/.test(t) ||
+        /\beth balance\b/.test(t) ||
+        /\bhow much\b/.test(t) ||
+        /\bcheck\b.*\bbal(?:ance)?\b/.test(t) ||
+        /\bwhat(?:'s| is)\s+(?:your|my)\s+bal(?:ance)?\b/.test(t);
+    if (asksBalance) return "wallet_balance";
+
+    // Default wallet-ish asks to balance unless clearly address-specific.
+    return "wallet_balance";
 }
 
 function isLocalDateTimeQuery(userText: string): boolean {
@@ -747,7 +764,7 @@ export async function runAgent(
             if (walletGuardIntent && !walletToolCalledInTurn) {
                 try {
                     const guarded = await AVAILABLE_TOOLS[walletGuardIntent]({});
-                    reply = `${reply}\n\n(Verified via ${walletGuardIntent})\n${guarded}`;
+                    reply = `${guarded}\n\n${reply}`;
                 } catch {
                     // Keep model reply if guard call fails unexpectedly.
                 }

@@ -366,6 +366,20 @@ function contentToText(userContent: string | ChatCompletionContentPart[]): strin
         .trim();
 }
 
+function isWalletBalanceIntent(text: string): boolean {
+    const t = text.toLowerCase();
+    return (
+        t.includes("wallet balance") ||
+        /\bbalance\b/.test(t) ||
+        /\bbal\b/.test(t) ||
+        /\beth balance\b/.test(t) ||
+        /\bhow much eth\b/.test(t) ||
+        /\bcheck\b.*\bbal(?:ance)?\b/.test(t) ||
+        /\bwhat(?:'s| is)\s+(?:your|my)\s+bal(?:ance)?\b/.test(t) ||
+        /\bwhat(?:'s| is)\s+your\s+balance\b/.test(t)
+    );
+}
+
 async function routeDeterministicIntent(ctx: any, userContent: string | ChatCompletionContentPart[]): Promise<boolean> {
     const rawText = contentToText(userContent);
     const text = rawText.toLowerCase();
@@ -404,9 +418,7 @@ async function routeDeterministicIntent(ctx: any, userContent: string | ChatComp
         return true;
     }
 
-    const wantsBalance =
-        text.includes("wallet balance") ||
-        /\b(balance|how much eth|eth balance)\b/i.test(text);
+    const wantsBalance = isWalletBalanceIntent(rawText);
     if (wantsBalance) {
         await performBalance(ctx);
         return true;
@@ -625,8 +637,8 @@ bot.on(message("text"), async (ctx) => {
 
     const normalized = text.trim().toLowerCase();
     const canonical = normalized.replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
-    const approveWords = new Set(["approve", "approved", "yes", "y", "allow", "ok"]);
-    const denyWords = new Set(["deny", "no", "n", "cancel", "reject"]);
+    const approveWords = new Set(["approve", "approved", "yes"]);
+    const denyWords = new Set(["deny", "no", "reject"]);
     const allowAllWords = new Set(["allow all", "always allow", "approve all"]);
 
     if (tgApproval.hasPending()) {
