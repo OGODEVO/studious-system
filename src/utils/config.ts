@@ -119,7 +119,10 @@ export const config = {
     // From YAML (env can override)
     model: process.env.OASIS_MODEL ?? yamlConfig.system.model,
     temperature: yamlConfig.system.temperature,
-    maxTokens: Math.min(yamlConfig.system.max_output_tokens || 4096, 130100),
+    maxTokens: Math.min(
+        yamlConfig.system.max_output_tokens || 4096,
+        yamlConfig.system.context_window || 128000
+    ),
     contextWindow: yamlConfig.system.context_window || 128000,
 
     // Browser

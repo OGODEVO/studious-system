@@ -2,8 +2,8 @@ system:
   model: "moonshotai/kimi-k2.5"
   provider: "novita"
   temperature: 0.7
-  context_window: 204800       # Total context size of the model
-  max_output_tokens: 130100   # Minimax M2.5 max (131100) minus safety buffer
+  context_window: 262144       # Kimi K2.5 context length
+  max_output_tokens: 262144    # Kimi K2.5 max output
 
 providers:
   novita:

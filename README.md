@@ -47,7 +47,6 @@ ETH_RPC_URL=https://mainnet.base.org
 OASIS_WALLET_CHAIN_ID=8453
 WALLET_PRIVATE_KEY=0x...
 # OASIS_SHOW_SEARCH_TOOL_EVENTS=true
-# OASIS_SHOW_TOKEN_FOOTER=false
 ```
 
 ## Perplexity Search vs Browser Automation

@@ -38,7 +38,6 @@ const bot = new Telegraf(BOT_TOKEN);
 const SEARCH_TRACE_TOOLS = new Set(["perplexity_search", "search_google"]);
 const SHOW_SEARCH_TOOL_EVENTS = process.env.OASIS_SHOW_SEARCH_TOOL_EVENTS === "true";
 const ALWAYS_VISIBLE_TOOL_CALLS = new Set(["perplexity_search"]);
-const SHOW_TOKEN_FOOTER = process.env.OASIS_SHOW_TOKEN_FOOTER !== "false";
 
 // ---------------------------------------------------------------------------
 // Approval Implementation
@@ -285,17 +284,12 @@ bot.command("reset", (ctx) => {
 
 let isProcessing = false;
 let planningMode: PlanningMode = "auto";
-let pendingSendAddress: string | null = null;
-let lastTokenUsage: TokenUsageEstimate | null = null;
-
-function formatTokenFooter(usage: TokenUsageEstimate): string {
-    return [
-        `Token usage (${usage.countMode}):`,
-        `context ${usage.contextTokens}/${usage.threshold} (${usage.contextPercent}%)`,
-        `reply ${usage.replyTokens}`,
-        `total ${usage.totalTokens}`,
-    ].join(" | ");
+interface PendingSendDraft {
+    to?: string;
+    amount?: string;
 }
+let pendingSendDraft: PendingSendDraft | null = null;
+let lastTokenUsage: TokenUsageEstimate | null = null;
 
 function authCheck(chatId: string): boolean {
     return !ALLOWED_CHAT_ID || chatId === ALLOWED_CHAT_ID;
@@ -311,43 +305,26 @@ async function performBalance(ctx: any, token?: string): Promise<void> {
     await ctx.reply(token ? `💰 Token balance: ${balance}` : `💰 ETH balance: ${balance}`);
 }
 
-function parseSendIntent(text: string): { to: string; amount?: string } | null {
+function extractRecipientAddress(text: string): string | undefined {
     const addressMatch = text.match(/0x[a-fA-F0-9]{40}/);
-    if (!addressMatch) return null;
-
-    const hasSendSignal =
-        /\bsend\b/i.test(text) || /\btransfer\b/i.test(text) || /\bpayout\b/i.test(text);
-    if (!hasSendSignal) return null;
-
-    const maxMatch = text.match(/\b(max|all|maximum)\b/i);
-    if (maxMatch) {
-        return {
-            to: addressMatch[0],
-            amount: "max",
-        };
-    }
-
-    const amountMatch = text.match(/(\d+(?:\.\d+)?)(?:\s*eth)?\b/i);
-    return {
-        to: addressMatch[0],
-        amount: amountMatch?.[1],
-    };
+    return addressMatch?.[0];
 }
 
-function parseAmountFollowUp(text: string): { mode: "max" } | { mode: "amount"; amount: string } | null {
+function extractAmount(text: string): string | undefined {
     const normalized = text.trim().toLowerCase();
     const canonical = normalized.replace(/[^\w.\s]/g, " ").replace(/\s+/g, " ").trim();
 
-    if (canonical === "max" || canonical === "all" || canonical === "maximum") {
-        return { mode: "max" };
-    }
+    if (/\b(max|all|maximum)\b/i.test(canonical)) return "max";
 
-    const amountOnly = canonical.match(/^(\d+(?:\.\d+)?)(?:\s*eth)?$/i);
-    if (amountOnly) {
-        return { mode: "amount", amount: amountOnly[1] };
-    }
+    const amountMatch = canonical.match(/(\d+(?:\.\d+)?)(?:\s*eth)?\b/i);
+    return amountMatch?.[1];
+}
 
-    return null;
+function isEthSendIntent(text: string): boolean {
+    const hasSendSignal = /\b(send|transfer|payout)\b/i.test(text);
+    const hasEthSignal = /\beth(?:ereum)?\b/i.test(text);
+    const hasAddress = /0x[a-fA-F0-9]{40}/.test(text);
+    return hasSendSignal && (hasEthSignal || hasAddress);
 }
 
 async function performSendEth(ctx: any, to: string, amount: string): Promise<void> {
@@ -427,34 +404,39 @@ async function routeDeterministicIntent(ctx: any, userContent: string | ChatComp
         return true;
     }
 
-    const sendIntent = parseSendIntent(rawText);
+    const parsedTo = extractRecipientAddress(rawText);
+    const parsedAmount = extractAmount(rawText);
+    const sendIntent = isEthSendIntent(rawText);
+
     if (sendIntent) {
-        if (!sendIntent.amount) {
-            pendingSendAddress = sendIntent.to;
-            await ctx.reply(`Specify amount too. Example: send 0.005 ETH ${sendIntent.to}`);
-            return true;
-        }
-        pendingSendAddress = null;
-        await performSendEth(ctx, sendIntent.to, sendIntent.amount);
-        return true;
+        const draft: PendingSendDraft = pendingSendDraft ? { ...pendingSendDraft } : {};
+        if (parsedTo) draft.to = parsedTo;
+        if (parsedAmount) draft.amount = parsedAmount;
+        pendingSendDraft = draft;
     }
 
-    if (pendingSendAddress) {
-        const followUp = parseAmountFollowUp(rawText);
-        if (followUp) {
-            try {
-                const amount =
-                    followUp.mode === "max"
-                        ? "max"
-                        : followUp.amount;
-                const target = pendingSendAddress;
-                pendingSendAddress = null;
-                await performSendEth(ctx, target, amount);
-            } catch (err) {
-                await ctx.reply(`❌ Send error: ${(err as Error).message}`);
-            }
+    if (pendingSendDraft) {
+        if (parsedTo) pendingSendDraft.to = parsedTo;
+        if (parsedAmount) pendingSendDraft.amount = parsedAmount;
+
+        if (!pendingSendDraft.to) {
+            await ctx.reply("Send ETH: provide recipient address (0x...).");
             return true;
         }
+        if (!pendingSendDraft.amount) {
+            await ctx.reply(`Send ETH: provide amount or 'max' for ${pendingSendDraft.to}.`);
+            return true;
+        }
+
+        try {
+            const { to, amount } = pendingSendDraft;
+            pendingSendDraft = null;
+            await performSendEth(ctx, to, amount);
+        } catch (err) {
+            pendingSendDraft = null;
+            await ctx.reply(`❌ Send error: ${(err as Error).message}`);
+        }
+        return true;
     }
 
     return false;
@@ -487,9 +469,7 @@ async function processAndReply(ctx: any, userContent: string | ChatCompletionCon
         );
 
         lastTokenUsage = result.tokenUsage;
-        const replyWithFooter = SHOW_TOKEN_FOOTER
-            ? `${result.reply}\n\n${formatTokenFooter(result.tokenUsage)}`
-            : result.reply;
+        const replyWithFooter = result.reply;
 
         history.push({ role: "user", content: userContent });
         history.push({ role: "assistant", content: replyWithFooter });
