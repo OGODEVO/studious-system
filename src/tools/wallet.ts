@@ -41,6 +41,7 @@ function resolveWalletConfig(): {
 
 const WALLET_CFG = resolveWalletConfig();
 const RPC_URL = WALLET_CFG.rpcUrl;
+const MAX_SEND_GAS_RESERVE_ETH = Number(process.env.OASIS_MAX_SEND_GAS_RESERVE_ETH || "0.00015");
 
 let provider: ethers.JsonRpcProvider;
 let wallet: ethers.Wallet;
@@ -94,6 +95,71 @@ export async function getBalance(tokenAddress?: string): Promise<string> {
 
     const balance = await provider.getBalance(w.address);
     return `${ethers.formatEther(balance)} ETH (network=${WALLET_CFG.network} chainId=${network.chainId.toString()} rpc=${RPC_URL})`;
+}
+
+export async function normalizeSendAmount(
+    amountRaw: string,
+    tokenAddress?: string
+): Promise<string> {
+    if (typeof amountRaw !== "string" || !amountRaw.trim()) {
+        throw new Error("Amount is required.");
+    }
+    const normalizedInput = amountRaw.trim().toLowerCase();
+    const isMaxKeyword =
+        normalizedInput === "max" ||
+        normalizedInput === "all" ||
+        normalizedInput === "maximum";
+
+    if (isMaxKeyword) {
+        const w = ensureWallet();
+        await ensureNetworkMatch();
+
+        if (tokenAddress) {
+            const erc20 = new ethers.Contract(
+                tokenAddress,
+                [
+                    "function balanceOf(address) view returns (uint256)",
+                    "function decimals() view returns (uint8)",
+                ],
+                provider
+            );
+            const [balance, decimals] = await Promise.all([
+                erc20.balanceOf(w.address),
+                erc20.decimals(),
+            ]);
+            if (balance <= 0n) throw new Error("Insufficient token balance for max send.");
+            return ethers.formatUnits(balance, decimals);
+        }
+
+        const balance = await provider.getBalance(w.address);
+        const reserveWei = ethers.parseEther(MAX_SEND_GAS_RESERVE_ETH.toString());
+        if (balance <= reserveWei) {
+            throw new Error(
+                `Insufficient ETH for max send after gas reserve (${MAX_SEND_GAS_RESERVE_ETH} ETH).`
+            );
+        }
+        const sendableWei = balance - reserveWei;
+        return ethers.formatEther(sendableWei);
+    }
+
+    const numeric = normalizedInput.match(/^(\d+(?:\.\d+)?)(?:\s*eth)?$/i);
+    if (!numeric) {
+        throw new Error(
+            "Invalid amount. Use a numeric value (e.g. 0.005) or 'max'."
+        );
+    }
+
+    return numeric[1];
+}
+
+export function normalizeRecipientAddress(toRaw: string): string {
+    if (typeof toRaw !== "string" || !toRaw.trim()) {
+        throw new Error("Recipient address is required.");
+    }
+    if (!ethers.isAddress(toRaw.trim())) {
+        throw new Error("Invalid recipient address.");
+    }
+    return ethers.getAddress(toRaw.trim());
 }
 
 export async function getNetworkStatus(): Promise<string> {

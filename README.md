@@ -47,6 +47,7 @@ ETH_RPC_URL=https://mainnet.base.org
 OASIS_WALLET_CHAIN_ID=8453
 WALLET_PRIVATE_KEY=0x...
 # OASIS_SHOW_SEARCH_TOOL_EVENTS=true
+# OASIS_SHOW_TOKEN_FOOTER=false
 ```
 
 ## Perplexity Search vs Browser Automation
@@ -68,6 +69,9 @@ Runtime routing behavior:
   - local date/time questions -> answer from runtime clock context (no web search)
 - Tool-integrity guard:
   - if the reply claims Perplexity usage without an actual in-turn call, the agent auto-runs `perplexity_search` and silently rewrites the final reply from verified results
+- Telegram tracing:
+  - `perplexity_search` tool-call start/end events are always visible
+  - other search tool traces remain opt-in via `OASIS_SHOW_SEARCH_TOOL_EVENTS=true`
 
 ## Scheduler and Heartbeat
 
@@ -78,6 +82,7 @@ Runtime commands:
 - `/heartbeat 30` (set 30-minute heartbeat)
 - `/heartbeat off` (disable)
 - `/grade` (resilience scorecard)
+- `/tokencount` (show current context token usage with `exact-ish` or `estimate` label)
 
 Telegram planning modes:
 - `/mode fast` → instant responses, no execution-plan generation
@@ -101,8 +106,10 @@ If the agent ever returns an incorrect wallet value in chat, treat it as a tool-
 Canonical path:
 - `wallet_address` for address
 - `wallet_balance` for balances
+- `wallet_send(to, amount, token?)` for transfers (`amount` supports numeric values or `max`)
 
 The agent prompt/tool schema is configured to force wallet tool calls for wallet-specific questions.
+`wallet_send` now performs amount normalization (including `max`), recipient validation, approval request, and transaction broadcast in one tool path.
 
 Telegram runtime also emits explicit `wallet_*` tool completion traces (with output preview) so you can verify executed tool results separately from assistant prose.
 

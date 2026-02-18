@@ -8,7 +8,13 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import { ApprovalInterface, ApprovalDecision } from "../utils/approval.js";
 import { agentBus, type ToolStartEvent, type ToolEndEvent } from "../utils/events.js";
-import { runAgent, type Message, type PlanningMode } from "../agent.js";
+import {
+    runAgent,
+    estimateTokenContext,
+    type Message,
+    type PlanningMode,
+    type TokenUsageEstimate,
+} from "../agent.js";
 import { setApprovalInterface, setGlobalAllow, getGlobalAllowStatus } from "../tools/shell.js";
 import { getAddress, getBalance, getNetworkStatus, getTransactionStatus } from "../tools/wallet.js";
 import { AVAILABLE_TOOLS } from "../tools/registry.js";
@@ -31,6 +37,8 @@ if (!BOT_TOKEN) {
 const bot = new Telegraf(BOT_TOKEN);
 const SEARCH_TRACE_TOOLS = new Set(["perplexity_search", "search_google"]);
 const SHOW_SEARCH_TOOL_EVENTS = process.env.OASIS_SHOW_SEARCH_TOOL_EVENTS === "true";
+const ALWAYS_VISIBLE_TOOL_CALLS = new Set(["perplexity_search"]);
+const SHOW_TOKEN_FOOTER = process.env.OASIS_SHOW_TOKEN_FOOTER !== "false";
 
 // ---------------------------------------------------------------------------
 // Approval Implementation
@@ -148,6 +156,7 @@ bot.command("start", (ctx) => {
         "/tx <hash> \\- Inspect a transaction on current RPC\n" +
         "/revoke \\- Revoke 'Allow All' permission\n" +
         "/update \\- Pull latest code \\& restart\n" +
+        "/tokencount \\- Show context token usage\n" +
         "/save \\- Save chat history to disk\n" +
         "/reset \\- Clear chat history",
         { parse_mode: "MarkdownV2" }
@@ -241,6 +250,22 @@ bot.command("update", async (ctx) => {
     }
 });
 
+bot.command("tokencount", async (ctx) => {
+    if (!authCheck(ctx.chat.id.toString())) { ctx.reply("⛔️ Unauthorized."); return; }
+    const snapshot = estimateTokenContext("", history, { planningMode });
+    const lines = [
+        `Token usage (${snapshot.countMode}):`,
+        `Context: ${snapshot.contextTokens} / ${snapshot.threshold} (${snapshot.contextPercent}%)`,
+        `Remaining before compaction: ${snapshot.remainingToThreshold}`,
+    ];
+    if (lastTokenUsage) {
+        lines.push(
+            `Last turn: context=${lastTokenUsage.contextTokens}, reply=${lastTokenUsage.replyTokens}, total=${lastTokenUsage.totalTokens}`
+        );
+    }
+    await ctx.reply(lines.join("\n"));
+});
+
 bot.command("save", (ctx) => {
     if (!authCheck(ctx.chat.id.toString())) { ctx.reply("⛔️ Unauthorized."); return; }
     saveSession();
@@ -261,6 +286,16 @@ bot.command("reset", (ctx) => {
 let isProcessing = false;
 let planningMode: PlanningMode = "auto";
 let pendingSendAddress: string | null = null;
+let lastTokenUsage: TokenUsageEstimate | null = null;
+
+function formatTokenFooter(usage: TokenUsageEstimate): string {
+    return [
+        `Token usage (${usage.countMode}):`,
+        `context ${usage.contextTokens}/${usage.threshold} (${usage.contextPercent}%)`,
+        `reply ${usage.replyTokens}`,
+        `total ${usage.totalTokens}`,
+    ].join(" | ");
+}
 
 function authCheck(chatId: string): boolean {
     return !ALLOWED_CHAT_ID || chatId === ALLOWED_CHAT_ID;
@@ -284,7 +319,15 @@ function parseSendIntent(text: string): { to: string; amount?: string } | null {
         /\bsend\b/i.test(text) || /\btransfer\b/i.test(text) || /\bpayout\b/i.test(text);
     if (!hasSendSignal) return null;
 
-    const amountMatch = text.match(/(\d+(?:\.\d+)?)\s*(eth)\b/i);
+    const maxMatch = text.match(/\b(max|all|maximum)\b/i);
+    if (maxMatch) {
+        return {
+            to: addressMatch[0],
+            amount: "max",
+        };
+    }
+
+    const amountMatch = text.match(/(\d+(?:\.\d+)?)(?:\s*eth)?\b/i);
     return {
         to: addressMatch[0],
         amount: amountMatch?.[1],
@@ -305,21 +348,6 @@ function parseAmountFollowUp(text: string): { mode: "max" } | { mode: "amount"; 
     }
 
     return null;
-}
-
-async function resolveMaxSendAmountEth(): Promise<string> {
-    const reserve = Number(process.env.OASIS_MAX_SEND_GAS_RESERVE_ETH || "0.00015");
-    const balanceText = await getBalance();
-    const match = balanceText.match(/^([0-9]+(?:\.[0-9]+)?)/);
-    if (!match) throw new Error(`Unable to parse ETH balance from: ${balanceText}`);
-
-    const balance = Number(match[1]);
-    if (!Number.isFinite(balance) || balance <= reserve) {
-        throw new Error(`Insufficient ETH for max send after reserving gas (${reserve} ETH). Balance: ${balance} ETH`);
-    }
-
-    const sendable = balance - reserve;
-    return sendable.toFixed(18).replace(/\.?0+$/, "");
 }
 
 async function performSendEth(ctx: any, to: string, amount: string): Promise<void> {
@@ -417,7 +445,7 @@ async function routeDeterministicIntent(ctx: any, userContent: string | ChatComp
             try {
                 const amount =
                     followUp.mode === "max"
-                        ? await resolveMaxSendAmountEth()
+                        ? "max"
                         : followUp.amount;
                 const target = pendingSendAddress;
                 pendingSendAddress = null;
@@ -458,16 +486,21 @@ async function processAndReply(ctx: any, userContent: string | ChatCompletionCon
             { planningMode }
         );
 
+        lastTokenUsage = result.tokenUsage;
+        const replyWithFooter = SHOW_TOKEN_FOOTER
+            ? `${result.reply}\n\n${formatTokenFooter(result.tokenUsage)}`
+            : result.reply;
+
         history.push({ role: "user", content: userContent });
-        history.push({ role: "assistant", content: result.reply });
-        pushSchedulerHistory({ role: "assistant", content: result.reply });
+        history.push({ role: "assistant", content: replyWithFooter });
+        pushSchedulerHistory({ role: "assistant", content: replyWithFooter });
         while (history.length > 100) history.shift();
 
-        if (result.reply.length > 4000) {
-            const chunks = result.reply.match(/.{1,4000}/gs) || [result.reply];
+        if (replyWithFooter.length > 4000) {
+            const chunks = replyWithFooter.match(/.{1,4000}/gs) || [replyWithFooter];
             for (const chunk of chunks) await ctx.reply(chunk);
         } else {
-            await ctx.reply(result.reply);
+            await ctx.reply(replyWithFooter);
         }
     } catch (err) {
         await ctx.reply(`❌ Error: ${(err as Error).message}`);
@@ -657,15 +690,17 @@ async function main() {
         const chatId = ALLOWED_CHAT_ID;
         agentBus.on("tool:start", (evt: ToolStartEvent) => {
             const isSearch = SEARCH_TRACE_TOOLS.has(evt.tool);
-            if (isSearch && !SHOW_SEARCH_TOOL_EVENTS) return;
+            const forceVisible = ALWAYS_VISIBLE_TOOL_CALLS.has(evt.tool);
+            if (isSearch && !SHOW_SEARCH_TOOL_EVENTS && !forceVisible) return;
             bot.telegram.sendMessage(chatId, evt.label, { parse_mode: "HTML" }).catch(() => { });
             bot.telegram.sendChatAction(chatId, "typing").catch(() => { });
         });
         agentBus.on("tool:end", (evt: ToolEndEvent) => {
-            // Wallet traces stay visible by default; search traces are opt-in to keep UI clean.
+            // Wallet traces stay visible; Perplexity execution is always visible; other search traces are opt-in.
             const isWallet = evt.tool.startsWith("wallet_");
             const isSearch = SEARCH_TRACE_TOOLS.has(evt.tool);
-            const shouldTrace = isWallet || (SHOW_SEARCH_TOOL_EVENTS && isSearch);
+            const forceVisible = ALWAYS_VISIBLE_TOOL_CALLS.has(evt.tool);
+            const shouldTrace = isWallet || forceVisible || (SHOW_SEARCH_TOOL_EVENTS && isSearch);
             if (!shouldTrace) return;
             const state = evt.success ? "✅" : "❌";
             const preview = isWallet && evt.outputPreview ? `\n${evt.outputPreview}` : "";

@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { encoding_for_model, get_encoding } from "tiktoken";
 import type {
     ChatCompletionMessageParam,
     ChatCompletionMessageToolCall,
@@ -86,6 +87,22 @@ export type PlanningMode = "fast" | "auto" | "autonomous";
 
 interface RunAgentOptions {
     planningMode?: PlanningMode;
+}
+
+export interface TokenUsageEstimate {
+    contextTokens: number;
+    replyTokens: number;
+    totalTokens: number;
+    threshold: number;
+    contextPercent: number;
+    remainingToThreshold: number;
+    countMode: "exact-ish" | "estimate";
+}
+
+export interface AgentRunResult {
+    reply: string;
+    history: Message[];
+    tokenUsage: TokenUsageEstimate;
 }
 
 // ---------------------------------------------------------------------------
@@ -521,12 +538,47 @@ export function getAgentHealthMetrics() {
     return agentCompletionExecutor.getAllMetrics();
 }
 
+export function estimateTokenContext(
+    userMessage: string | ChatCompletionContentPart[],
+    history: Message[],
+    options?: RunAgentOptions
+): TokenUsageEstimate {
+    const tokenCounter = getTokenCounter(config.model);
+    const textContent = getTextContent(userMessage);
+    const planningMode = options?.planningMode ?? "auto";
+    const matchedSkill = selectSkill(textContent, skillRegistry);
+    const executionPlanContext = shouldGenerateExecutionPlan(textContent, planningMode)
+        ? "## Active Execution Plan\n(estimated)"
+        : undefined;
+    const systemPrompt = buildSystemPrompt(
+        matchedSkill?.body,
+        executionPlanContext,
+        getToolRoutingHintContext(textContent)
+    );
+    const contextTokens =
+        tokenCounter.count(systemPrompt) +
+        tokenCounter.count(JSON.stringify(history)) +
+        tokenCounter.count(textContent);
+    const threshold = config.compactionTokenThreshold;
+    const remainingToThreshold = Math.max(0, threshold - contextTokens);
+    const contextPercent = threshold > 0 ? Number(((contextTokens / threshold) * 100).toFixed(1)) : 0;
+    return {
+        contextTokens,
+        replyTokens: 0,
+        totalTokens: contextTokens,
+        threshold,
+        contextPercent,
+        remainingToThreshold,
+        countMode: tokenCounter.mode,
+    };
+}
+
 export async function runAgent(
     userMessage: string | ChatCompletionContentPart[],
     history: Message[],
     onToken?: OnTokenCallback,
     options?: RunAgentOptions
-): Promise<{ reply: string; history: Message[] }> {
+): Promise<AgentRunResult> {
     // Pre-compaction flush when history gets long
     // --- Token Management & Compaction ---
     // We estimate tokens to decide when to flush.
@@ -536,10 +588,18 @@ export async function runAgent(
     // Note: We build a temporary system prompt to measure it.
     // In a real app, we might cache this, but string concat is cheap enough.
     const textContent = getTextContent(userMessage);
+    const tokenCounter = getTokenCounter(config.model);
     const planningMode = options?.planningMode ?? "auto";
     const matchedSkill = selectSkill(textContent, skillRegistry);
-    const tempSystem = buildSystemPrompt(matchedSkill?.body);
-    const estimatedTokens = estimateTokenCount(tempSystem) + estimateTokenCount(JSON.stringify(history)) + estimateTokenCount(textContent);
+    const tempSystem = buildSystemPrompt(
+        matchedSkill?.body,
+        undefined,
+        getToolRoutingHintContext(textContent)
+    );
+    const estimatedTokens =
+        tokenCounter.count(tempSystem) +
+        tokenCounter.count(JSON.stringify(history)) +
+        tokenCounter.count(textContent);
 
     if (estimatedTokens >= config.compactionTokenThreshold) {
         console.log("   💾 Context size (" + estimatedTokens + " tokens) exceeded threshold " + config.compactionTokenThreshold + ". Flushing...");
@@ -735,13 +795,30 @@ export async function runAgent(
                 { role: "assistant", content: reply },
             ];
 
+            const contextTokens =
+                tokenCounter.count(systemPrompt) +
+                tokenCounter.count(JSON.stringify(history)) +
+                tokenCounter.count(textContent);
+            const replyTokens = tokenCounter.count(reply);
+            const threshold = config.compactionTokenThreshold;
+            const totalTokens = contextTokens + replyTokens;
+            const tokenUsage: TokenUsageEstimate = {
+                contextTokens,
+                replyTokens,
+                totalTokens,
+                threshold,
+                contextPercent: threshold > 0 ? Number(((contextTokens / threshold) * 100).toFixed(1)) : 0,
+                remainingToThreshold: Math.max(0, threshold - contextTokens),
+                countMode: tokenCounter.mode,
+            };
+
             // Log this turn to the daily episodic log
             logTurnSummary(getTextContent(userMessage), reply);
 
             // Fire per-turn episodic extraction (non-blocking)
             extractEpisodicFromTurn(getTextContent(userMessage), reply).catch(() => { });
 
-            return { reply, history: updatedHistory };
+            return { reply, history: updatedHistory, tokenUsage };
         }
     }
 }
@@ -777,4 +854,49 @@ function getTextContent(content: unknown): string {
 
 function estimateTokenCount(text: string): number {
     return Math.ceil(text.length / 3.5); // Rough heuristic for English text
+}
+
+interface TokenCounter {
+    mode: "exact-ish" | "estimate";
+    count: (text: string) => number;
+}
+
+const tokenCounterCache = new Map<string, TokenCounter>();
+
+function getTokenCounter(modelId: string): TokenCounter {
+    const cacheKey = modelId.trim().toLowerCase();
+    const cached = tokenCounterCache.get(cacheKey);
+    if (cached) return cached;
+
+    const modelName = modelId.split("/").pop()?.trim() || modelId.trim();
+    const tokenizer = createTokenizerCounter(modelName);
+    tokenCounterCache.set(cacheKey, tokenizer);
+    return tokenizer;
+}
+
+function createTokenizerCounter(modelName: string): TokenCounter {
+    try {
+        let encoding;
+        try {
+            encoding = encoding_for_model(modelName as never);
+        } catch {
+            if (/^(gpt-5|gpt-4o|o\d)/i.test(modelName)) {
+                encoding = get_encoding("o200k_base");
+            } else if (/^(gpt-4|gpt-3\.5|text-embedding)/i.test(modelName)) {
+                encoding = get_encoding("cl100k_base");
+            } else {
+                throw new Error("No tokenizer mapping for model");
+            }
+        }
+
+        return {
+            mode: "exact-ish",
+            count: (text: string) => encoding.encode(text).length,
+        };
+    } catch {
+        return {
+            mode: "estimate",
+            count: estimateTokenCount,
+        };
+    }
 }

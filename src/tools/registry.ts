@@ -11,7 +11,14 @@ import {
 } from "./browser.js";
 import { perplexitySearch } from "./perplexity.js";
 import { runCommand, selfUpdate, getApprovalInterface } from "./shell.js";
-import { getAddress, getBalance, sendTransaction, callContract } from "./wallet.js";
+import {
+    getAddress,
+    getBalance,
+    sendTransaction,
+    callContract,
+    normalizeSendAmount,
+    normalizeRecipientAddress,
+} from "./wallet.js";
 import { getHeartbeatStatus, setHeartbeat, disableHeartbeat } from "../runtime/scheduler.js";
 
 // ---------------------------------------------------------------------------
@@ -236,7 +243,7 @@ export const TOOLS_SCHEMA: ChatCompletionTool[] = [
         type: "function",
         function: {
             name: "wallet_send",
-            description: "Sends ETH or an ERC-20 token from the agent's wallet. ALWAYS requires explicit owner approval via Telegram.",
+            description: "Sends ETH or an ERC-20 token from the agent's wallet. Accepts amount as a number string or 'max'. ALWAYS requires explicit owner approval via Telegram.",
             parameters: {
                 type: "object",
                 properties: {
@@ -330,16 +337,18 @@ export const AVAILABLE_TOOLS: Record<string, ToolFn> = {
     },
     wallet_send: async (a) => {
         const { to, amount, token } = a as { to: string; amount: string; token?: string };
+        const recipient = normalizeRecipientAddress(to);
+        const resolvedAmount = await normalizeSendAmount(amount, token);
         const desc = token
-            ? `Send ${amount} tokens (${token}) to ${to}`
-            : `Send ${amount} ETH to ${to}`;
+            ? `Send ${resolvedAmount} tokens (${token}) to ${recipient}`
+            : `Send ${resolvedAmount} ETH to ${recipient}`;
 
         // FORCED approval — always ask, even if Global Allow is on
         const iface = getApprovalInterface();
         const approved = await iface.requestApproval(desc);
         if (!approved) return "Transaction REJECTED by owner.";
 
-        const txHash = await sendTransaction(to, amount, token);
+        const txHash = await sendTransaction(recipient, resolvedAmount, token);
         return `Transaction sent! TX hash: ${txHash}`;
     },
     wallet_call_contract: async (a) => {

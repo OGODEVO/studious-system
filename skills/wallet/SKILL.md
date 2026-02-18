@@ -8,6 +8,8 @@ triggers:
   - send eth
   - send token
   - transfer
+  - send max
+  - send all
   - check balance
   - my address
   - smart contract
@@ -19,7 +21,7 @@ triggers:
 priority: 90
 inputs:
   - recipient address
-  - amount
+  - amount (numeric or max)
   - token contract address
   - ABI fragment
 outputs:
@@ -50,7 +52,9 @@ Use this skill for anything involving the agent's ETH wallet, on-chain queries, 
 ## Guidelines
 
 - When the user asks about balances, use `wallet_balance`.
-- When the user asks to send crypto, use `wallet_send` and clearly state the amount and recipient before executing.
+- When the user asks to send crypto, pass only `to`, `amount` (or `max`), and optional `token` into `wallet_send`.
+- Do not manually calculate max-send amount in chat logic. Use `amount: "max"` and let the tool resolve it.
+- Do not simulate approval text. `wallet_send` triggers the real approval request flow and broadcast path.
 - For smart contract interactions, construct the minimal ABI fragment needed for the specific function call.
 - Never reveal the private key or seed phrase.
 - If you don't know a token's contract address, use the browser to look it up first.
@@ -66,6 +70,9 @@ Call `wallet_balance` with `token: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"`
 
 **Send ETH:**
 Call `wallet_send` with `to` and `amount`.
+
+**Send max ETH:**
+Call `wallet_send` with `to` and `amount: "max"`.
 
 **Read a contract:**
 Call `wallet_call_contract` with the contract address, a minimal ABI fragment like `[{"name":"balanceOf","type":"function","stateMutability":"view","inputs":[{"name":"account","type":"address"}],"outputs":[{"name":"","type":"uint256"}]}]`, the function name, and args.
