@@ -12,6 +12,14 @@ interface RuntimeReminder {
     enabled: boolean;
 }
 
+interface OneTimeReminder {
+    id: string;
+    prompt: string;
+    runAtMs: number;
+    lane: LaneName;
+    enabled: boolean;
+}
+
 const MIN_INTERVAL_MINUTES = 1;
 const HEARTBEAT_ID = "self-heartbeat";
 const reminderExecutor = new ResilientExecutor({
@@ -29,6 +37,7 @@ const reminderExecutor = new ResilientExecutor({
 
 let tickTimer: NodeJS.Timeout | null = null;
 const nextRunById = new Map<string, number>();
+const oneTimeById = new Map<string, OneTimeReminder>();
 const running = new Set<string>();
 const runtimeHeartbeat = {
     enabled: config.scheduler.heartbeat.enabled,
@@ -102,8 +111,19 @@ function persistState(): void {
         nextRun[id] = ts;
     }
 
+    const oneTimeReminders = Array.from(oneTimeById.values())
+        .sort((a, b) => a.runAtMs - b.runAtMs)
+        .map((r) => ({
+            id: r.id,
+            prompt: r.prompt,
+            runAtMs: r.runAtMs,
+            lane: r.lane,
+            enabled: r.enabled,
+        }));
+
     saveSchedulerState({
         nextRunById: nextRun,
+        oneTimeReminders,
         heartbeat: { ...runtimeHeartbeat },
     });
 }
@@ -128,9 +148,29 @@ function loadPersistedState(): void {
             runtimeHeartbeat.prompt = state.heartbeat.prompt.trim();
         }
     }
+
+    if (Array.isArray(state.oneTimeReminders)) {
+        for (const item of state.oneTimeReminders) {
+            if (!item || typeof item !== "object") continue;
+            if (typeof item.id !== "string" || !item.id.trim()) continue;
+            if (typeof item.prompt !== "string" || !item.prompt.trim()) continue;
+            if (typeof item.runAtMs !== "number" || !Number.isFinite(item.runAtMs)) continue;
+            const lane: LaneName =
+                item.lane === "fast" || item.lane === "slow" || item.lane === "background"
+                    ? item.lane
+                    : "background";
+            oneTimeById.set(item.id, {
+                id: item.id,
+                prompt: item.prompt,
+                runAtMs: item.runAtMs,
+                lane,
+                enabled: item.enabled !== false,
+            });
+        }
+    }
 }
 
-async function runReminder(reminder: RuntimeReminder): Promise<void> {
+async function runReminder(reminder: { id: string; prompt: string; lane: LaneName }): Promise<void> {
     if (running.has(reminder.id)) return;
 
     running.add(reminder.id);
@@ -180,6 +220,16 @@ async function tick(): Promise<void> {
         if (now < nextRun) continue;
 
         nextRunById.set(reminder.id, now + toMs(reminder.intervalMinutes));
+        persistState();
+        void runReminder(reminder);
+    }
+
+    const oneTimeDue = Array.from(oneTimeById.values()).filter(
+        (r) => r.enabled && now >= r.runAtMs
+    );
+    for (const reminder of oneTimeDue) {
+        if (running.has(reminder.id)) continue;
+        oneTimeById.delete(reminder.id);
         persistState();
         void runReminder(reminder);
     }
@@ -242,4 +292,72 @@ export function getHeartbeatStatus(): {
 
 export function getSchedulerHealthMetrics() {
     return reminderExecutor.getAllMetrics();
+}
+
+export function scheduleOneTimeReminderAt(
+    runAtMs: number,
+    prompt: string,
+    lane: LaneName = "background"
+): string {
+    const safePrompt = prompt.trim();
+    if (!safePrompt) {
+        throw new Error("Prompt is required.");
+    }
+    if (!Number.isFinite(runAtMs)) {
+        throw new Error("Invalid runAt timestamp.");
+    }
+
+    const now = nowMs();
+    if (runAtMs <= now + 2000) {
+        throw new Error("runAt must be in the future.");
+    }
+
+    const id = "once-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
+    oneTimeById.set(id, {
+        id,
+        prompt: safePrompt,
+        runAtMs: Math.floor(runAtMs),
+        lane,
+        enabled: true,
+    });
+    persistState();
+    return id;
+}
+
+export function scheduleOneTimeReminderInMinutes(
+    delayMinutes: number,
+    prompt: string,
+    lane: LaneName = "background"
+): string {
+    if (!Number.isFinite(delayMinutes) || delayMinutes <= 0) {
+        throw new Error("delayMinutes must be > 0.");
+    }
+    return scheduleOneTimeReminderAt(nowMs() + toMs(delayMinutes), prompt, lane);
+}
+
+export function cancelOneTimeReminder(id: string): boolean {
+    const removed = oneTimeById.delete(id);
+    if (removed) persistState();
+    return removed;
+}
+
+export function listOneTimeReminders(): Array<{
+    id: string;
+    prompt: string;
+    runAtMs: number;
+    lane: LaneName;
+    enabled: boolean;
+    dueInMs: number;
+}> {
+    const now = nowMs();
+    return Array.from(oneTimeById.values())
+        .sort((a, b) => a.runAtMs - b.runAtMs)
+        .map((r) => ({
+            id: r.id,
+            prompt: r.prompt,
+            runAtMs: r.runAtMs,
+            lane: r.lane,
+            enabled: r.enabled,
+            dueInMs: Math.max(0, r.runAtMs - now),
+        }));
 }

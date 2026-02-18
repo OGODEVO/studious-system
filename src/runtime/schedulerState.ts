@@ -3,6 +3,13 @@ import * as path from "path";
 
 export interface PersistedSchedulerState {
     nextRunById: Record<string, number>;
+    oneTimeReminders?: Array<{
+        id: string;
+        prompt: string;
+        runAtMs: number;
+        lane: "fast" | "slow" | "background";
+        enabled?: boolean;
+    }>;
     heartbeat?: {
         enabled: boolean;
         intervalMinutes: number;

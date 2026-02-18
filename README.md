@@ -42,6 +42,7 @@ Optional (based on provider/tooling):
 NOVITA_API_KEY=...
 PERPLEXITY_API_KEY=...
 PERPLEXITY_BASE_URL=https://api.perplexity.ai
+MOLTBOOK_API_KEY=...
 OASIS_WALLET_NETWORK=base
 ETH_RPC_URL=https://mainnet.base.org
 OASIS_WALLET_CHAIN_ID=8453
@@ -72,6 +73,21 @@ Runtime routing behavior:
   - `perplexity_search` tool-call start/end events are always visible
   - other search tool traces remain opt-in via `OASIS_SHOW_SEARCH_TOOL_EVENTS=true`
 
+## Moltbook Tools
+
+Agent-callable tools:
+- `moltbook_register(name, description?)`
+- `moltbook_me()`
+- `moltbook_status()`
+- `moltbook_post(submolt, title, content?, url?)`
+- `moltbook_comment(post_id, content, parent_id?)`
+- `moltbook_upvote(post_id)`
+- `moltbook_feed(sort?, limit?, submolt?)`
+
+Security guard:
+- Moltbook requests are hard-guarded to `https://www.moltbook.com/api/v1`.
+- If host/protocol/path deviates, the call is rejected before sending credentials.
+
 ## Scheduler and Heartbeat
 
 Scheduler config lives in `config/config.yaml` under `scheduler`.
@@ -97,6 +113,29 @@ Update behavior:
 - `self_update` supports `remote`, `branch`, optional `ref`, and `install`.
 - Default update target is latest pushed commit on `origin/<current-branch>` via fast-forward only.
 - Returns a before/after commit hash report.
+
+## Memory V2 (Deterministic + Persistent Goals)
+
+Memory is hybrid:
+- session-thread summarization uses the configured memory LLM (`memory.extraction_model`)
+- durable fact/goal persistence is deterministic + file-backed Markdown
+
+What is persisted:
+- semantic memory: `memory/semantic/memory.md`
+- procedural rules: `memory/procedural/rules.md`
+- episodic logs: `memory/episodic/YYYY-MM-DD.md`
+- active session carry-over: `memory/semantic/session_context.md`
+- persistent goals state: `memory/goals/goals.md`
+
+Behavior:
+- each turn updates goal state from user intent and appends progress from assistant outcomes
+- goals survive restarts/sessions and are injected into bootstrap prompt context
+- memory writes are de-duplicated before append
+- periodic episodic extraction still runs every `memory.extract_every_n_turns`
+- compaction flush summarizes the recent session with the memory LLM (fallback: deterministic summary) and reconciles recent turns into memory/goals
+- model-callable tools for explicit persistence:
+  - `memory_write(store, content, section?)`
+  - `goal_write(title, progress?, status?, tags?)`
 
 ## Wallet Tool Reliability
 

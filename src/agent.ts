@@ -28,9 +28,11 @@ Your owner communicates with you over Telegram. You are always-on and self-suffi
 
 You have several tools at your disposal:
 - A web browser (navigate, click, type, extract text, screenshot, search Google)
+- Moltbook social tools (register, profile/status, post, comment, upvote, feed)
 - A shell (run commands — git, npm, scripts, etc.)
 - An ETH wallet on Base — this is YOUR wallet. You can check your balance, send ETH or tokens, and call any smart contract (read state, swap tokens, mint NFTs, interact with DeFi protocols). Write transactions always need your owner's approval via Telegram, but read-only calls are yours to make freely. If you don't know a contract address, look it up yourself using the browser.
 - Scheduled reminders and a heartbeat system
+- Persistent memory tools (memory_write, goal_write) for storing durable user facts/preferences and mission progress
 
 Guidelines:
 - Act autonomously. Use your tools to gather real data — never guess or hallucinate.
@@ -38,10 +40,13 @@ Guidelines:
 - Be in sync. You and your user are a team — anticipate their needs, remember what matters to them, and align with their goals.
 - When browsing, always use full URLs (https://) and extract_text after navigating.
 - Prefer perplexity_search for fast real-time web lookup before full browser automation.
+- Use Moltbook tools for Moltbook actions; do not simulate posts/comments in plain text.
 - Use search_google when you need raw SERP behavior from Google specifically.
 - For "what's today's date/time" or other local time/date questions, answer from Runtime Time Context and do not use web search tools.
 - For any wallet-specific question (address, balance, token holdings, tx hash), ALWAYS call the corresponding wallet tool first. Never guess or reuse a previously stated wallet value without re-checking.
 - For heartbeat scheduling requests, use heartbeat_status / heartbeat_set / heartbeat_disable tools instead of telling the user to edit config files.
+- For one-time internal cron tasks, use reminder_once_in / reminder_once_at / reminder_once_list / reminder_once_cancel (agent-only scheduling).
+- When the user states durable preferences, constraints, or long-term goals, use memory_write / goal_write to persist them.
 - In Telegram runtime, critical intents may be routed deterministically (update/wallet/balance) before LLM planning; align with those direct tool-backed paths.
 - Shell commands (run_command) may require user approval depending on the current permission mode.
 - If the user asks you to perform a tool-capable action, execute it in the same turn and return the result. Do not send placeholder responses like "I'll check" without actually running the tool.
@@ -292,31 +297,9 @@ async function executeToolCalls(
     const results: Message[] = [];
 
     for (const tc of toolCalls) {
-        const fn = AVAILABLE_TOOLS[tc.function.name];
-        let output: string;
         let args: Record<string, unknown> = {};
         try { args = JSON.parse(tc.function.arguments); } catch { /* empty args */ }
-
-        agentBus.emitToolStart(tc.function.name, args);
-        const t0 = Date.now();
-
-        if (fn) {
-            try {
-                output = await fn(args);
-            } catch (err) {
-                output = "Error executing " + tc.function.name + ": " + (err as Error).message;
-            }
-        } else {
-            output = "Unknown tool: " + tc.function.name;
-        }
-
-        agentBus.emitToolEnd(
-            tc.function.name,
-            Date.now() - t0,
-            !output.startsWith("Error"),
-            output.slice(0, 1200)
-        );
-        console.log("   Tool: " + tc.function.name + " -> " + output.slice(0, 80) + "...");
+        const output = await executeSingleTool(tc.function.name, args);
 
         results.push({
             role: "tool",
@@ -326,6 +309,36 @@ async function executeToolCalls(
     }
 
     return results;
+}
+
+async function executeSingleTool(
+    toolName: string,
+    args: Record<string, unknown>
+): Promise<string> {
+    const fn = AVAILABLE_TOOLS[toolName];
+    let output: string;
+
+    agentBus.emitToolStart(toolName, args);
+    const t0 = Date.now();
+
+    if (fn) {
+        try {
+            output = await fn(args);
+        } catch (err) {
+            output = "Error executing " + toolName + ": " + (err as Error).message;
+        }
+    } else {
+        output = "Unknown tool: " + toolName;
+    }
+
+    agentBus.emitToolEnd(
+        toolName,
+        Date.now() - t0,
+        !output.startsWith("Error"),
+        output.slice(0, 1200)
+    );
+    console.log("   Tool: " + toolName + " -> " + output.slice(0, 80) + "...");
+    return output;
 }
 
 function detectWalletGuardIntent(userText: string): "wallet_address" | "wallet_balance" | null {
@@ -354,6 +367,234 @@ function detectWalletGuardIntent(userText: string): "wallet_address" | "wallet_b
 
     // Default wallet-ish asks to balance unless clearly address-specific.
     return "wallet_balance";
+}
+
+function detectWalletDeterministicIntent(userText: string): "wallet_address" | "wallet_balance" | null {
+    const t = userText.toLowerCase();
+    if (/\b(send|transfer|withdraw|pay)\b/.test(t)) return null;
+
+    const asksAddress =
+        (t.includes("wallet") && t.includes("address")) ||
+        /\bwhat(?:'s| is)\s+your\s+wallet\b/.test(t);
+    if (asksAddress) return "wallet_address";
+
+    const asksBalance =
+        /\bwhat(?:'s| is)\s+(?:your|my)\s+(?:wallet\s+)?bal(?:ance)?\b/.test(t) ||
+        /\bcheck\b.*\bbal(?:ance)?\b/.test(t) ||
+        /\beth balance\b/.test(t) ||
+        /\bhow much eth\b/.test(t);
+    if (asksBalance) return "wallet_balance";
+
+    return null;
+}
+
+type DeterministicToolRoute = {
+    tool: keyof typeof AVAILABLE_TOOLS;
+    args: Record<string, unknown>;
+};
+
+function extractFieldValue(text: string, field: string): string | null {
+    const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const quoted = new RegExp(`${escaped}\\s*:\\s*"([^"]+)"`, "i");
+    const singleQuoted = new RegExp(`${escaped}\\s*:\\s*'([^']+)'`, "i");
+    const plain = new RegExp(`${escaped}\\s*:\\s*([^,\\n]+)`, "i");
+
+    const q = text.match(quoted);
+    if (q?.[1]) return q[1].trim();
+    const sq = text.match(singleQuoted);
+    if (sq?.[1]) return sq[1].trim();
+    const p = text.match(plain);
+    if (p?.[1]) return p[1].trim();
+    return null;
+}
+
+function parseMoltbookRoute(userText: string): DeterministicToolRoute | null {
+    const t = userText.toLowerCase();
+    if (!t.includes("moltbook")) return null;
+
+    if (/\bmoltbook\b.*\b(me|profile)\b/.test(t)) {
+        return { tool: "moltbook_me", args: {} };
+    }
+    if (/\bmoltbook\b.*\bstatus\b/.test(t)) {
+        return { tool: "moltbook_status", args: {} };
+    }
+    if (/\bmoltbook\b.*\bfeed\b/.test(t)) {
+        const sort =
+            /\brising\b/.test(t) ? "rising"
+                : /\btop\b/.test(t) ? "top"
+                    : /\bnew\b/.test(t) ? "new"
+                        : "hot";
+        const limitMatch = t.match(/\blimit\s*[:=]?\s*(\d{1,2})\b/);
+        const submolt = extractFieldValue(userText, "submolt") ?? extractFieldValue(userText, "community");
+        return {
+            tool: "moltbook_feed",
+            args: {
+                sort,
+                ...(limitMatch ? { limit: Number(limitMatch[1]) } : {}),
+                ...(submolt ? { submolt } : {}),
+            },
+        };
+    }
+    if (/\bmoltbook\b.*\bupvote\b/.test(t)) {
+        const postId = extractFieldValue(userText, "post_id") ?? extractFieldValue(userText, "post");
+        if (!postId) return null;
+        return { tool: "moltbook_upvote", args: { post_id: postId } };
+    }
+    if (/\bmoltbook\b.*\bcomment\b/.test(t)) {
+        const postId = extractFieldValue(userText, "post_id") ?? extractFieldValue(userText, "post");
+        const content = extractFieldValue(userText, "content");
+        const parentId = extractFieldValue(userText, "parent_id");
+        if (!postId || !content) return null;
+        return {
+            tool: "moltbook_comment",
+            args: {
+                post_id: postId,
+                content,
+                ...(parentId ? { parent_id: parentId } : {}),
+            },
+        };
+    }
+    if (/\bmoltbook\b.*\bpost\b/.test(t)) {
+        const submolt = extractFieldValue(userText, "submolt");
+        const title = extractFieldValue(userText, "title");
+        const content = extractFieldValue(userText, "content");
+        const url = extractFieldValue(userText, "url");
+        if (!submolt || !title || (!content && !url)) return null;
+        return {
+            tool: "moltbook_post",
+            args: {
+                submolt,
+                title,
+                ...(content ? { content } : {}),
+                ...(url ? { url } : {}),
+            },
+        };
+    }
+    if (/\bmoltbook\b.*\bregister\b/.test(t)) {
+        const name = extractFieldValue(userText, "name");
+        const description = extractFieldValue(userText, "description");
+        if (!name) return null;
+        return {
+            tool: "moltbook_register",
+            args: {
+                name,
+                ...(description ? { description } : {}),
+            },
+        };
+    }
+    return null;
+}
+
+function parseSchedulerRoute(userText: string): DeterministicToolRoute | null {
+    const t = userText.toLowerCase().trim();
+
+    if ((t.includes("heartbeat") && /\b(off|disable|stop)\b/.test(t)) || t === "/heartbeat off") {
+        return { tool: "heartbeat_disable", args: {} };
+    }
+
+    if (t === "/heartbeat" || /\bheartbeat status\b/.test(t)) {
+        return { tool: "heartbeat_status", args: {} };
+    }
+
+    const hbSetMatch = t.match(/\bheartbeat\b.*?(\d{1,4}(?:\.\d+)?)\s*(?:m|min|mins|minute|minutes)\b/);
+    if (hbSetMatch) {
+        const prompt = extractFieldValue(userText, "prompt");
+        return {
+            tool: "heartbeat_set",
+            args: {
+                interval_minutes: Number(hbSetMatch[1]),
+                ...(prompt ? { prompt } : {}),
+            },
+        };
+    }
+
+    if (/\breminder\b.*\blist\b/.test(t) || t === "/reminders") {
+        return { tool: "reminder_once_list", args: {} };
+    }
+
+    if (/\breminder\b.*\bcancel\b/.test(t)) {
+        const id = extractFieldValue(userText, "id");
+        if (!id) return null;
+        return { tool: "reminder_once_cancel", args: { id } };
+    }
+
+    const inMatch = userText.match(
+        /\b(?:remind(?:er)?(?: me)?|schedule)\s+(?:in\s+)?(\d+(?:\.\d+)?)\s*(minutes?|mins?|hours?|hrs?)\s+(?:to\s+)?(.+)$/i
+    );
+    if (inMatch?.[1] && inMatch?.[2] && inMatch?.[3]) {
+        const raw = Number(inMatch[1]);
+        const unit = inMatch[2].toLowerCase();
+        const prompt = inMatch[3].trim();
+        if (Number.isFinite(raw) && prompt) {
+            const minutes = unit.startsWith("h") ? raw * 60 : raw;
+            return { tool: "reminder_once_in", args: { minutes, prompt } };
+        }
+    }
+
+    const atIsoField = extractFieldValue(userText, "run_at_iso");
+    const atPromptField = extractFieldValue(userText, "prompt");
+    if (atIsoField && atPromptField) {
+        return {
+            tool: "reminder_once_at",
+            args: { run_at_iso: atIsoField, prompt: atPromptField },
+        };
+    }
+
+    const atMatch = userText.match(
+        /\b(?:remind(?:er)?(?: me)?|schedule)\s+(?:at|on)\s+([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:\-.+Z]+)\s+(?:to\s+)?(.+)$/i
+    );
+    if (atMatch?.[1] && atMatch?.[2]) {
+        return {
+            tool: "reminder_once_at",
+            args: { run_at_iso: atMatch[1].trim(), prompt: atMatch[2].trim() },
+        };
+    }
+
+    return null;
+}
+
+function getTexasNowReply(): string {
+    const now = new Date();
+    const tz = "America/Chicago";
+    const date = new Intl.DateTimeFormat("en-US", {
+        timeZone: tz,
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "2-digit",
+    }).format(now);
+    const time = new Intl.DateTimeFormat("en-US", {
+        timeZone: tz,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: true,
+        timeZoneName: "short",
+    }).format(now);
+    return `Texas local date/time: ${date}, ${time}.`;
+}
+
+async function tryDeterministicRoute(userText: string): Promise<string | null> {
+    if (isLocalDateTimeQuery(userText)) {
+        return getTexasNowReply();
+    }
+
+    const walletIntent = detectWalletDeterministicIntent(userText);
+    if (walletIntent) {
+        return executeSingleTool(walletIntent, {});
+    }
+
+    const schedulerRoute = parseSchedulerRoute(userText);
+    if (schedulerRoute) {
+        return executeSingleTool(schedulerRoute.tool, schedulerRoute.args);
+    }
+
+    const moltbookRoute = parseMoltbookRoute(userText);
+    if (moltbookRoute) {
+        return executeSingleTool(moltbookRoute.tool, moltbookRoute.args);
+    }
+
+    return null;
 }
 
 function isLocalDateTimeQuery(userText: string): boolean {
@@ -411,6 +652,32 @@ function claimsPerplexityUsage(text: string): boolean {
         t.includes("perplexity search") ||
         t.includes("from perplexity") ||
         t.includes("using perplexity")
+    );
+}
+
+function claimsMoltbookUsage(text: string): boolean {
+    const t = text.toLowerCase();
+    return (
+        t.includes("moltbook") &&
+        (
+            t.includes("post") ||
+            t.includes("comment") ||
+            t.includes("upvote") ||
+            t.includes("feed") ||
+            t.includes("status") ||
+            t.includes("registered")
+        )
+    );
+}
+
+function claimsSchedulerAction(text: string): boolean {
+    const t = text.toLowerCase();
+    return (
+        t.includes("heartbeat") ||
+        t.includes("scheduled") ||
+        t.includes("reminder set") ||
+        t.includes("i'll remind") ||
+        t.includes("i will remind")
     );
 }
 
@@ -629,6 +896,41 @@ export async function runAgent(
         console.log("   Skill matched: " + matchedSkill.name + " (" + matchedSkill.id + ")");
     }
 
+    // Deterministic high-confidence router for obvious tool-intents.
+    // This removes model guessing for wallet/date-time/moltbook/scheduler intents.
+    const deterministicReply = await tryDeterministicRoute(textContent);
+    if (deterministicReply) {
+        const deterministicSystem = buildSystemPrompt(
+            matchedSkill?.body,
+            undefined,
+            getToolRoutingHintContext(textContent)
+        );
+        const updatedHistory: Message[] = [
+            ...history,
+            { role: "user", content: userMessage },
+            { role: "assistant", content: deterministicReply },
+        ];
+        const contextTokens =
+            tokenCounter.count(deterministicSystem) +
+            tokenCounter.count(JSON.stringify(history)) +
+            tokenCounter.count(textContent);
+        const replyTokens = tokenCounter.count(deterministicReply);
+        const threshold = config.compactionTokenThreshold;
+        const tokenUsage: TokenUsageEstimate = {
+            contextTokens,
+            replyTokens,
+            totalTokens: contextTokens + replyTokens,
+            threshold,
+            contextPercent: threshold > 0 ? Number(((contextTokens / threshold) * 100).toFixed(1)) : 0,
+            remainingToThreshold: Math.max(0, threshold - contextTokens),
+            countMode: tokenCounter.mode,
+        };
+
+        logTurnSummary(getTextContent(userMessage), deterministicReply);
+        extractEpisodicFromTurn(getTextContent(userMessage), deterministicReply).catch(() => { });
+        return { reply: deterministicReply, history: updatedHistory, tokenUsage };
+    }
+
     let executionPlan: ExecutionPlan | null = null;
     if (shouldGenerateExecutionPlan(textContent, planningMode)) {
         executionPlan = await generateExecutionPlan(textContent, history);
@@ -651,6 +953,8 @@ export async function runAgent(
     ];
     const walletGuardIntent = detectWalletGuardIntent(textContent);
     let walletToolCalledInTurn = false;
+    let schedulerToolCalledInTurn = false;
+    let moltbookToolCalledInTurn = false;
     const realtimeGuard = needsRealtimeSearchVerification(textContent);
     let realtimeSearchToolCalledInTurn = false;
     let perplexityCalledInTurn = false;
@@ -729,6 +1033,15 @@ export async function runAgent(
                 walletToolCalledInTurn = true;
             }
             if (toolCalls.some((tc) =>
+                tc.function.name.startsWith("heartbeat_") ||
+                tc.function.name.startsWith("reminder_once_")
+            )) {
+                schedulerToolCalledInTurn = true;
+            }
+            if (toolCalls.some((tc) => tc.function.name.startsWith("moltbook_"))) {
+                moltbookToolCalledInTurn = true;
+            }
+            if (toolCalls.some((tc) =>
                 tc.function.name === "perplexity_search" ||
                 tc.function.name === "search_google" ||
                 tc.function.name === "navigate" ||
@@ -795,6 +1108,36 @@ export async function runAgent(
                     reply = await rewriteReplyWithLiveSearch(textContent, reply, guarded);
                 } catch {
                     // Keep original reply if correction call fails.
+                }
+            }
+
+            // Integrity guard: if the assistant claims Moltbook actions without tool execution,
+            // force a deterministic Moltbook tool call when possible.
+            if (claimsMoltbookUsage(reply) && !moltbookToolCalledInTurn) {
+                try {
+                    const route = parseMoltbookRoute(textContent);
+                    if (route) {
+                        const guarded = await executeSingleTool(route.tool, route.args);
+                        reply = `${guarded}\n\n${reply}`;
+                        moltbookToolCalledInTurn = true;
+                    }
+                } catch {
+                    // Keep original reply on guard failure.
+                }
+            }
+
+            // Integrity guard: if scheduler actions are claimed without scheduler tool execution,
+            // force the matching scheduler tool call when intent is parseable.
+            if (claimsSchedulerAction(reply) && !schedulerToolCalledInTurn) {
+                try {
+                    const route = parseSchedulerRoute(textContent);
+                    if (route) {
+                        const guarded = await executeSingleTool(route.tool, route.args);
+                        reply = `${guarded}\n\n${reply}`;
+                        schedulerToolCalledInTurn = true;
+                    }
+                } catch {
+                    // Keep original reply on guard failure.
                 }
             }
 

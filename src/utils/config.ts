@@ -74,6 +74,9 @@ interface OasisConfig {
         rpc_url?: string;
         expected_chain_id?: number;
     };
+    moltbook?: {
+        base_url?: string;
+    };
 }
 
 function loadYamlConfig(): OasisConfig {
@@ -100,6 +103,12 @@ const envKeyName = activeProvider
     ? `${activeProvider.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}_API_KEY`
     : "OPENAI_API_KEY";
 const envKey = process.env[envKeyName];
+const resolvedPrimaryApiKey =
+    providerConfig?.api_key ||
+    yamlConfig.system.api_key ||
+    envKey ||
+    process.env.OPENAI_API_KEY ||
+    "";
 const walletExpectedChainIdRaw =
     process.env.OASIS_WALLET_CHAIN_ID ??
     (yamlConfig.wallet?.expected_chain_id !== undefined
@@ -113,7 +122,7 @@ const walletExpectedChainId =
 export const config = {
     // Secrets from .env or YAML
     // Priority: Provider Config > System Config > Provider Env Var > OPENAI_API_KEY
-    openaiKey: providerConfig?.api_key || yamlConfig.system.api_key || envKey || process.env.OPENAI_API_KEY || "",
+    openaiKey: resolvedPrimaryApiKey,
     openaiBaseUrl: providerConfig?.base_url || yamlConfig.system.base_url || undefined,
 
     // From YAML (env can override)
@@ -141,7 +150,7 @@ export const config = {
     // Memory
     memoryModel: yamlConfig.memory.extraction_model,
     memoryBaseUrl: yamlConfig.memory.extraction_base_url || undefined,
-    memoryApiKey: yamlConfig.memory.extraction_api_key || process.env.OPENAI_API_KEY || "",
+    memoryApiKey: yamlConfig.memory.extraction_api_key || resolvedPrimaryApiKey,
     memoryTemperature: yamlConfig.memory.extraction_temperature,
     memoryMaxTokens: yamlConfig.memory.extraction_max_tokens,
     extractEveryNTurns: yamlConfig.memory.extract_every_n_turns,
@@ -183,6 +192,13 @@ export const config = {
     walletNetwork: (process.env.OASIS_WALLET_NETWORK || yamlConfig.wallet?.network || "base").toLowerCase(),
     walletRpcUrl: process.env.ETH_RPC_URL || yamlConfig.wallet?.rpc_url || "",
     walletExpectedChainId,
+
+    // Moltbook
+    moltbookApiKey: process.env.MOLTBOOK_API_KEY || "",
+    moltbookBaseUrl:
+        process.env.MOLTBOOK_BASE_URL ||
+        yamlConfig.moltbook?.base_url ||
+        "https://www.moltbook.com/api/v1",
 } as const;
 
 if (!config.openaiKey) {

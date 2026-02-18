@@ -10,6 +10,15 @@ import {
     getCurrentUrl,
 } from "./browser.js";
 import { perplexitySearch } from "./perplexity.js";
+import {
+    moltbookRegister,
+    moltbookMe,
+    moltbookStatus,
+    moltbookPost,
+    moltbookComment,
+    moltbookUpvote,
+    moltbookFeed,
+} from "./moltbook.js";
 import { runCommand, selfUpdate, getApprovalInterface } from "./shell.js";
 import {
     getAddress,
@@ -19,7 +28,17 @@ import {
     normalizeSendAmount,
     normalizeRecipientAddress,
 } from "./wallet.js";
-import { getHeartbeatStatus, setHeartbeat, disableHeartbeat } from "../runtime/scheduler.js";
+import {
+    getHeartbeatStatus,
+    setHeartbeat,
+    disableHeartbeat,
+    scheduleOneTimeReminderInMinutes,
+    scheduleOneTimeReminderAt,
+    listOneTimeReminders,
+    cancelOneTimeReminder,
+} from "../runtime/scheduler.js";
+import { writeGoalEntry, writeMemoryEntry } from "../memory/manager.js";
+import type { LaneName } from "../runtime/taskQueue.js";
 
 // ---------------------------------------------------------------------------
 // Schema — exposed to OpenAI function calling
@@ -159,6 +178,103 @@ export const TOOLS_SCHEMA: ChatCompletionTool[] = [
     {
         type: "function",
         function: {
+            name: "moltbook_register",
+            description: "Register a new Moltbook agent and receive api_key/claim_url/verification_code.",
+            parameters: {
+                type: "object",
+                properties: {
+                    name: { type: "string", description: "Agent display name." },
+                    description: { type: "string", description: "Optional agent description." },
+                },
+                required: ["name"],
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "moltbook_me",
+            description: "Fetch the current Moltbook agent profile (requires MOLTBOOK_API_KEY).",
+            parameters: { type: "object", properties: {} },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "moltbook_status",
+            description: "Fetch Moltbook claim status (pending_claim/claimed).",
+            parameters: { type: "object", properties: {} },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "moltbook_post",
+            description: "Create a Moltbook post (text and/or link).",
+            parameters: {
+                type: "object",
+                properties: {
+                    submolt: { type: "string", description: "Community slug, e.g. general." },
+                    title: { type: "string", description: "Post title." },
+                    content: { type: "string", description: "Text body content." },
+                    url: { type: "string", description: "Optional link for a link post." },
+                },
+                required: ["submolt", "title"],
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "moltbook_comment",
+            description: "Create a comment on a Moltbook post, optionally as a reply.",
+            parameters: {
+                type: "object",
+                properties: {
+                    post_id: { type: "string", description: "Target post id." },
+                    content: { type: "string", description: "Comment body." },
+                    parent_id: { type: "string", description: "Optional parent comment id for replies." },
+                },
+                required: ["post_id", "content"],
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "moltbook_upvote",
+            description: "Upvote a Moltbook post.",
+            parameters: {
+                type: "object",
+                properties: {
+                    post_id: { type: "string", description: "Target post id." },
+                },
+                required: ["post_id"],
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "moltbook_feed",
+            description: "Read Moltbook feed posts.",
+            parameters: {
+                type: "object",
+                properties: {
+                    sort: {
+                        type: "string",
+                        enum: ["hot", "new", "top", "rising"],
+                        description: "Feed sort order.",
+                    },
+                    limit: { type: "number", description: "Result size (1-50)." },
+                    submolt: { type: "string", description: "Optional community filter." },
+                },
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
             name: "run_command",
             description: "Execute a shell command. Use for git, npm, file operations. REQUIRES USER APPROVAL.",
             parameters: {
@@ -216,6 +332,119 @@ export const TOOLS_SCHEMA: ChatCompletionTool[] = [
             name: "heartbeat_disable",
             description: "Disable heartbeat scheduler.",
             parameters: { type: "object", properties: {} },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "reminder_once_in",
+            description: "Schedule a one-time internal reminder for the agent to run after N minutes (agent-only cron style).",
+            parameters: {
+                type: "object",
+                properties: {
+                    minutes: { type: "number", description: "Delay in minutes (>0)." },
+                    prompt: { type: "string", description: "Task prompt to run when due." },
+                    lane: {
+                        type: "string",
+                        enum: ["fast", "slow", "background"],
+                        description: "Optional scheduler lane (default: background).",
+                    },
+                },
+                required: ["minutes", "prompt"],
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "reminder_once_at",
+            description: "Schedule a one-time internal reminder for a specific ISO datetime (agent-only cron style).",
+            parameters: {
+                type: "object",
+                properties: {
+                    run_at_iso: { type: "string", description: "UTC or offset ISO timestamp (e.g. 2026-02-19T14:30:00Z)." },
+                    prompt: { type: "string", description: "Task prompt to run when due." },
+                    lane: {
+                        type: "string",
+                        enum: ["fast", "slow", "background"],
+                        description: "Optional scheduler lane (default: background).",
+                    },
+                },
+                required: ["run_at_iso", "prompt"],
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "reminder_once_list",
+            description: "List pending one-time internal reminders.",
+            parameters: { type: "object", properties: {} },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "reminder_once_cancel",
+            description: "Cancel a pending one-time internal reminder by id.",
+            parameters: {
+                type: "object",
+                properties: {
+                    id: { type: "string", description: "Reminder id returned by reminder_once_in/at/list." },
+                },
+                required: ["id"],
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "memory_write",
+            description: "Persist durable memory notes. Use for stable user facts/preferences/workflow rules worth keeping across sessions.",
+            parameters: {
+                type: "object",
+                properties: {
+                    store: {
+                        type: "string",
+                        enum: ["semantic", "procedural"],
+                        description: "Target memory store.",
+                    },
+                    content: {
+                        type: "string",
+                        description: "Concise durable memory note.",
+                    },
+                    section: {
+                        type: "string",
+                        description: "Optional markdown section name. Defaults by store.",
+                    },
+                },
+                required: ["store", "content"],
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "goal_write",
+            description: "Create or update persistent goal state. Use to track mission progress and completion over time.",
+            parameters: {
+                type: "object",
+                properties: {
+                    title: { type: "string", description: "Goal title." },
+                    progress: { type: "string", description: "Optional progress update note." },
+                    status: {
+                        type: "string",
+                        enum: ["active", "completed", "paused", "cancelled"],
+                        description: "Optional goal status.",
+                    },
+                    tags: {
+                        type: "array",
+                        items: { type: "string" },
+                        description: "Optional tags for grouping/search.",
+                    },
+                },
+                required: ["title"],
+            },
         },
     },
     {
@@ -300,6 +529,35 @@ export const AVAILABLE_TOOLS: Record<string, ToolFn> = {
             }
         ),
     get_current_url: () => getCurrentUrl(),
+    moltbook_register: (a) => moltbookRegister(a as { name: string; description?: string }),
+    moltbook_me: () => moltbookMe(),
+    moltbook_status: () => moltbookStatus(),
+    moltbook_post: (a) =>
+        moltbookPost(
+            a as {
+                submolt: string;
+                title: string;
+                content?: string;
+                url?: string;
+            }
+        ),
+    moltbook_comment: (a) =>
+        moltbookComment(
+            a as {
+                post_id: string;
+                content: string;
+                parent_id?: string;
+            }
+        ),
+    moltbook_upvote: (a) => moltbookUpvote(a as { post_id: string }),
+    moltbook_feed: (a) =>
+        moltbookFeed(
+            a as {
+                sort?: "hot" | "new" | "top" | "rising";
+                limit?: number;
+                submolt?: string;
+            }
+        ),
     run_command: (a) => runCommand(a as { command: string }),
     self_update: (a) =>
         selfUpdate(
@@ -326,6 +584,85 @@ export const AVAILABLE_TOOLS: Record<string, ToolFn> = {
     heartbeat_disable: async () => {
         disableHeartbeat();
         return "Heartbeat disabled.";
+    },
+    reminder_once_in: async (a) => {
+        const { minutes, prompt, lane } = a as {
+            minutes: number;
+            prompt: string;
+            lane?: LaneName;
+        };
+        if (!Number.isFinite(minutes) || minutes <= 0) {
+            return "Error: minutes must be > 0.";
+        }
+        if (!prompt || !prompt.trim()) {
+            return "Error: prompt is required.";
+        }
+        const selectedLane: LaneName =
+            lane === "fast" || lane === "slow" || lane === "background"
+                ? lane
+                : "background";
+        const id = scheduleOneTimeReminderInMinutes(minutes, prompt, selectedLane);
+        return `One-time reminder scheduled: ${id} (in ${minutes} min, lane=${selectedLane}).`;
+    },
+    reminder_once_at: async (a) => {
+        const { run_at_iso, prompt, lane } = a as {
+            run_at_iso: string;
+            prompt: string;
+            lane?: LaneName;
+        };
+        if (!run_at_iso || !run_at_iso.trim()) {
+            return "Error: run_at_iso is required.";
+        }
+        const ts = Date.parse(run_at_iso);
+        if (!Number.isFinite(ts)) {
+            return "Error: run_at_iso must be a valid ISO datetime.";
+        }
+        if (!prompt || !prompt.trim()) {
+            return "Error: prompt is required.";
+        }
+        const selectedLane: LaneName =
+            lane === "fast" || lane === "slow" || lane === "background"
+                ? lane
+                : "background";
+        const id = scheduleOneTimeReminderAt(ts, prompt, selectedLane);
+        return `One-time reminder scheduled: ${id} (at ${new Date(ts).toISOString()}, lane=${selectedLane}).`;
+    },
+    reminder_once_list: async () => {
+        const reminders = listOneTimeReminders();
+        if (reminders.length === 0) {
+            return "No pending one-time reminders.";
+        }
+        return reminders
+            .map((r, i) => {
+                const dueMin = Math.ceil(r.dueInMs / 60000);
+                return `${i + 1}. ${r.id} | lane=${r.lane} | run_at=${new Date(r.runAtMs).toISOString()} | due_in=${dueMin}m | ${r.prompt}`;
+            })
+            .join("\n");
+    },
+    reminder_once_cancel: async (a) => {
+        const { id } = a as { id: string };
+        if (!id || !id.trim()) {
+            return "Error: id is required.";
+        }
+        const ok = cancelOneTimeReminder(id.trim());
+        return ok ? `Cancelled one-time reminder: ${id.trim()}` : `Reminder not found: ${id.trim()}`;
+    },
+    memory_write: async (a) => {
+        const { store, content, section } = a as {
+            store: "semantic" | "procedural";
+            content: string;
+            section?: string;
+        };
+        return writeMemoryEntry({ store, content, section });
+    },
+    goal_write: async (a) => {
+        const { title, progress, status, tags } = a as {
+            title: string;
+            progress?: string;
+            status?: "active" | "completed" | "paused" | "cancelled";
+            tags?: string[];
+        };
+        return writeGoalEntry({ title, progress, status, tags });
     },
     wallet_address: async () => {
         const addr = await getAddress();

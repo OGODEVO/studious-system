@@ -1,20 +1,126 @@
 import * as fs from "fs";
 import * as path from "path";
 import OpenAI from "openai";
-import type {
-    ChatCompletionMessageParam,
-    ChatCompletionTool,
-} from "openai/resources/chat/completions";
+import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { config } from "../utils/config.js";
 import type { Message } from "../agent.js";
 import { ResilientExecutor } from "../runtime/resilience.js";
 
-// ---------------------------------------------------------------------------
-// Dedicated memory extraction client (supports any OpenAI v1 endpoint)
-// ---------------------------------------------------------------------------
+type GoalStatus = "active" | "completed" | "paused" | "cancelled";
+type GoalProgressSource = "user" | "assistant" | "system";
+
+interface GoalProgressEntry {
+    at: string;
+    source: GoalProgressSource;
+    note: string;
+}
+
+interface GoalRecord {
+    id: string;
+    title: string;
+    status: GoalStatus;
+    createdAt: string;
+    updatedAt: string;
+    tags: string[];
+    progress: GoalProgressEntry[];
+}
+
+export interface GoalSnapshot {
+    id: string;
+    title: string;
+    status: GoalStatus;
+    updatedAt: string;
+    latestProgress: string;
+}
+
+interface GoalsState {
+    version: number;
+    goals: GoalRecord[];
+}
+
+interface MemoryHealthMetrics {
+    semanticWrites: number;
+    proceduralWrites: number;
+    episodicWrites: number;
+    goalCreates: number;
+    goalUpdates: number;
+    duplicateSkips: number;
+    errors: number;
+    lastWriteAt: string | null;
+}
+
+const memoryHealth: MemoryHealthMetrics = {
+    semanticWrites: 0,
+    proceduralWrites: 0,
+    episodicWrites: 0,
+    goalCreates: 0,
+    goalUpdates: 0,
+    duplicateSkips: 0,
+    errors: 0,
+    lastWriteAt: null,
+};
+
+const OASIS_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
+const MEMORY_DIR = path.join(OASIS_ROOT, "memory");
+
+const SEMANTIC_DIR = path.join(MEMORY_DIR, "semantic");
+const SEMANTIC_FILE = path.join(SEMANTIC_DIR, "memory.md");
+const SESSION_CONTEXT_FILE = path.join(SEMANTIC_DIR, "session_context.md");
+
+const EPISODIC_DIR = path.join(MEMORY_DIR, "episodic");
+
+const PROCEDURAL_DIR = path.join(MEMORY_DIR, "procedural");
+const RULES_FILE = path.join(PROCEDURAL_DIR, "rules.md");
+
+const GOALS_DIR = path.join(MEMORY_DIR, "goals");
+const GOALS_FILE = path.join(GOALS_DIR, "goals.md");
+
+const SNAPSHOTS_DIR = path.join(MEMORY_DIR, "snapshots");
+
+const DEFAULT_SEMANTIC_DOC = `# Oasis Memory
+
+## User Preferences
+
+## Known Facts
+
+## Workflow Notes
+`;
+
+const DEFAULT_PROCEDURAL_DOC = `# Procedural Memory
+
+Rules and learned behaviors that guide how Oasis operates.
+
+## Operating Rules
+
+## Learned Behaviors
+`;
+
+const DEFAULT_GOALS_DOC = `# Goals Memory
+
+Persistent mission tracking for Oasis.
+
+## Goals
+`;
+
+const GOAL_PROGRESS_LIMIT = 24;
+
+const SESSION_SUMMARY_PROMPT = `You are summarizing an AI-agent/user conversation for persistent memory.
+
+Output concise markdown with these sections:
+## Current Goal
+- Main objective the user is pursuing now
+
+## Important Facts About User
+- Stable preferences, constraints, location/timezone, workflow style
+
+## Progress and Next Steps
+- What was completed
+- What remains
+
+Be factual, specific, and avoid fluff.`;
 
 let _memoryClient: OpenAI | null = null;
-const memoryCompletionExecutor = new ResilientExecutor({
+const memorySummaryExecutor = new ResilientExecutor({
     retry: {
         maxAttempts: 3,
         baseDelayMs: 500,
@@ -27,6 +133,10 @@ const memoryCompletionExecutor = new ResilientExecutor({
     },
 });
 
+function nowIso(): string {
+    return new Date().toISOString();
+}
+
 function getMemoryClient(): OpenAI {
     if (!_memoryClient) {
         _memoryClient = new OpenAI({
@@ -37,40 +147,31 @@ function getMemoryClient(): OpenAI {
     return _memoryClient;
 }
 
-export function getMemoryHealthMetrics() {
-    return memoryCompletionExecutor.getAllMetrics();
-}
-
-// ---------------------------------------------------------------------------
-// Paths — CoALA-aligned directory structure
-// ---------------------------------------------------------------------------
-
-const OASIS_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
-const MEMORY_DIR = path.join(OASIS_ROOT, "memory");
-
-const SEMANTIC_DIR = path.join(MEMORY_DIR, "semantic");
-const SEMANTIC_FILE = path.join(SEMANTIC_DIR, "memory.md");
-
-const EPISODIC_DIR = path.join(MEMORY_DIR, "episodic");
-
-const PROCEDURAL_DIR = path.join(MEMORY_DIR, "procedural");
-const RULES_FILE = path.join(PROCEDURAL_DIR, "rules.md");
-
-const SNAPSHOTS_DIR = path.join(MEMORY_DIR, "snapshots");
-const SESSION_CONTEXT_FILE = path.join(SEMANTIC_DIR, "session_context.md");
-
-function ensureDirs(): void {
-    for (const dir of [SEMANTIC_DIR, EPISODIC_DIR, PROCEDURAL_DIR, SNAPSHOTS_DIR]) {
-        fs.mkdirSync(dir, { recursive: true });
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function todayDateString(): string {
     return new Date().toISOString().slice(0, 10);
+}
+
+function bumpWriteMetric(kind: "semantic" | "procedural" | "episodic"): void {
+    if (kind === "semantic") memoryHealth.semanticWrites += 1;
+    if (kind === "procedural") memoryHealth.proceduralWrites += 1;
+    if (kind === "episodic") memoryHealth.episodicWrites += 1;
+    memoryHealth.lastWriteAt = nowIso();
+}
+
+function ensureDirs(): void {
+    for (const dir of [SEMANTIC_DIR, EPISODIC_DIR, PROCEDURAL_DIR, GOALS_DIR, SNAPSHOTS_DIR]) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
+
+    if (!fs.existsSync(SEMANTIC_FILE)) {
+        fs.writeFileSync(SEMANTIC_FILE, DEFAULT_SEMANTIC_DOC, "utf-8");
+    }
+    if (!fs.existsSync(RULES_FILE)) {
+        fs.writeFileSync(RULES_FILE, DEFAULT_PROCEDURAL_DOC, "utf-8");
+    }
+    if (!fs.existsSync(GOALS_FILE)) {
+        writeAtomicFile(GOALS_FILE, DEFAULT_GOALS_DOC);
+    }
 }
 
 function readFileOrEmpty(filepath: string): string {
@@ -81,9 +182,364 @@ function readFileOrEmpty(filepath: string): string {
     }
 }
 
+function writeAtomicFile(filepath: string, content: string): void {
+    const tmp = filepath + ".tmp";
+    fs.writeFileSync(tmp, content, "utf-8");
+    fs.renameSync(tmp, filepath);
+}
+
+function serializeGoalStateMarkdown(state: GoalsState): string {
+    const lines: string[] = [];
+    lines.push("# Goals Memory");
+    lines.push("");
+    lines.push("Persistent mission tracking for Oasis.");
+    lines.push("");
+    lines.push("## Goals");
+    lines.push("");
+
+    const goals = [...state.goals].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    for (const goal of goals) {
+        lines.push(`## Goal: ${goal.title}`);
+        lines.push(`- id: ${goal.id}`);
+        lines.push(`- status: ${goal.status}`);
+        lines.push(`- created_at: ${goal.createdAt}`);
+        lines.push(`- updated_at: ${goal.updatedAt}`);
+        lines.push(`- tags: ${goal.tags.join(", ")}`);
+        lines.push("### Progress");
+
+        if (goal.progress.length === 0) {
+            lines.push("- [n/a] (system) no progress logged");
+        } else {
+            for (const item of goal.progress) {
+                const safeNote = normalizeSpace(item.note).replace(/\|/g, "/");
+                lines.push(`- [${item.at}] (${item.source}) ${safeNote}`);
+            }
+        }
+        lines.push("");
+    }
+
+    return lines.join("\n").trimEnd() + "\n";
+}
+
+function parseGoalStateMarkdown(raw: string): GoalsState {
+    const lines = raw.split(/\r?\n/);
+    const goals: GoalRecord[] = [];
+
+    let current: GoalRecord | null = null;
+
+    const flushCurrent = () => {
+        if (!current) return;
+        current.progress = current.progress
+            .filter((p) => p.note.trim().length > 0)
+            .slice(-GOAL_PROGRESS_LIMIT);
+        goals.push(current);
+        current = null;
+    };
+
+    for (const line of lines) {
+        const goalHeader = line.match(/^## Goal:\s+(.+)$/);
+        if (goalHeader) {
+            flushCurrent();
+            const title = normalizeSpace(goalHeader[1] || "");
+            const ts = nowIso();
+            current = {
+                id: `goal_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+                title,
+                status: "active",
+                createdAt: ts,
+                updatedAt: ts,
+                tags: [],
+                progress: [],
+            };
+            continue;
+        }
+
+        if (!current) continue;
+
+        const idMatch = line.match(/^- id:\s+(.+)$/);
+        if (idMatch) {
+            current.id = normalizeSpace(idMatch[1] || current.id);
+            continue;
+        }
+
+        const statusMatch = line.match(/^- status:\s+(.+)$/);
+        if (statusMatch) {
+            const status = normalizeSpace(statusMatch[1] || "").toLowerCase();
+            if (status === "active" || status === "completed" || status === "paused" || status === "cancelled") {
+                current.status = status;
+            }
+            continue;
+        }
+
+        const createdMatch = line.match(/^- created_at:\s+(.+)$/);
+        if (createdMatch) {
+            current.createdAt = normalizeSpace(createdMatch[1] || current.createdAt);
+            continue;
+        }
+
+        const updatedMatch = line.match(/^- updated_at:\s+(.+)$/);
+        if (updatedMatch) {
+            current.updatedAt = normalizeSpace(updatedMatch[1] || current.updatedAt);
+            continue;
+        }
+
+        const tagsMatch = line.match(/^- tags:\s*(.*)$/);
+        if (tagsMatch) {
+            const rawTags = normalizeSpace(tagsMatch[1] || "");
+            current.tags = rawTags
+                ? rawTags.split(",").map((t) => normalizeSpace(t)).filter(Boolean)
+                : [];
+            continue;
+        }
+
+        const progressMatch = line.match(/^- \[(.+)\]\s+\((user|assistant|system)\)\s+(.+)$/);
+        if (progressMatch) {
+            const at = normalizeSpace(progressMatch[1] || nowIso());
+            const source = progressMatch[2] as GoalProgressSource;
+            const note = normalizeSpace(progressMatch[3] || "");
+            if (note && at !== "n/a") {
+                current.progress.push({ at, source, note });
+            }
+        }
+    }
+
+    flushCurrent();
+    return { version: 2, goals };
+}
+
+function readGoalsState(): GoalsState {
+    ensureDirs();
+    try {
+        const raw = fs.readFileSync(GOALS_FILE, "utf-8");
+        return parseGoalStateMarkdown(raw);
+    } catch {
+        memoryHealth.errors += 1;
+        return { version: 2, goals: [] };
+    }
+}
+
+function writeGoalsState(state: GoalsState): void {
+    ensureDirs();
+    writeAtomicFile(GOALS_FILE, serializeGoalStateMarkdown(state));
+    memoryHealth.lastWriteAt = nowIso();
+}
+
+function normalizeSpace(input: string): string {
+    return input.replace(/\s+/g, " ").trim();
+}
+
+function normalizeForCompare(input: string): string {
+    return normalizeSpace(input)
+        .toLowerCase()
+        .replace(/[`*_~]/g, "")
+        .replace(/[^\w\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+function toTokenSet(input: string): Set<string> {
+    const words = normalizeForCompare(input)
+        .split(" ")
+        .filter((w) => w.length >= 3);
+    return new Set(words);
+}
+
+function overlapScore(a: string, b: string): number {
+    const aSet = toTokenSet(a);
+    const bSet = toTokenSet(b);
+    if (aSet.size === 0 || bSet.size === 0) return 0;
+
+    let overlap = 0;
+    for (const token of aSet) {
+        if (bSet.has(token)) overlap += 1;
+    }
+    const union = new Set([...aSet, ...bSet]).size;
+    return union === 0 ? 0 : overlap / union;
+}
+
+function cleanLineForGoal(raw: string): string {
+    return normalizeSpace(
+        raw
+            .replace(/^[-*]\s+/, "")
+            .replace(/^\d+[.)]\s+/, "")
+            .replace(/\*+/g, "")
+            .replace(/^[\s"'`]+|[\s"'`]+$/g, "")
+    ).replace(/[.?!,:;]+$/, "");
+}
+
+function isLikelyGoalText(text: string): boolean {
+    if (text.length < 8) return false;
+    const lower = text.toLowerCase();
+    const trigger =
+        /\b(need to|have to|goal|mission|priority|priorities|build|implement|fix|set up|setup|create|track|remember|automate)\b/.test(lower) ||
+        lower.startsWith("let's ") ||
+        lower.startsWith("i want ") ||
+        lower.startsWith("we need ");
+    return trigger;
+}
+
+function extractGoalCandidatesFromUserMessage(message: string): string[] {
+    const text = message.trim();
+    if (!text) return [];
+
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const result = new Set<string>();
+
+    const hasPrioritySignal = /top priorities?|priorities|missions?|goals?/i.test(text);
+    if (hasPrioritySignal) {
+        for (const line of lines) {
+            if (/^[-*]\s+/.test(line) || /^\d+[.)]\s+/.test(line)) {
+                const candidate = cleanLineForGoal(line);
+                if (candidate.length >= 8) result.add(candidate);
+            }
+        }
+    }
+
+    const sentenceCandidates = normalizeSpace(text).split(/[.!?]/).map((s) => s.trim()).filter(Boolean);
+    const regexes = [
+        /\bwe need to\s+(.+)/i,
+        /\bi want (?:you|us|the agent)?\s*to\s+(.+)/i,
+        /\blet'?s\s+(.+)/i,
+        /\bgoal\s*:\s*(.+)/i,
+        /\bmission\s*:\s*(.+)/i,
+        /\bpriority\s*:\s*(.+)/i,
+    ];
+
+    for (const sentence of sentenceCandidates) {
+        for (const rx of regexes) {
+            const m = sentence.match(rx);
+            if (!m) continue;
+            const candidate = cleanLineForGoal(m[1] || "");
+            if (candidate.length >= 8) result.add(candidate);
+        }
+    }
+
+    if (result.size === 0) {
+        const fallback = cleanLineForGoal(text);
+        if (isLikelyGoalText(fallback)) {
+            result.add(fallback);
+        }
+    }
+
+    return Array.from(result).slice(0, 6);
+}
+
+function isSameGoal(existingTitle: string, candidate: string): boolean {
+    const a = normalizeForCompare(existingTitle);
+    const b = normalizeForCompare(candidate);
+    if (!a || !b) return false;
+    if (a === b) return true;
+    if (a.includes(b) || b.includes(a)) return true;
+    return overlapScore(a, b) >= 0.72;
+}
+
+function compactProgress(goal: GoalRecord): void {
+    if (goal.progress.length <= GOAL_PROGRESS_LIMIT) return;
+    goal.progress = goal.progress.slice(-GOAL_PROGRESS_LIMIT);
+}
+
+function updateGoalStatusFromSignals(goal: GoalRecord, text: string): void {
+    const lower = text.toLowerCase();
+    if (/(done|completed|shipped|resolved|finished|fixed)\b/.test(lower)) {
+        goal.status = "completed";
+    } else if (/(pause|paused|hold this)\b/.test(lower)) {
+        goal.status = "paused";
+    } else if (/(cancel|drop|stop this)\b/.test(lower)) {
+        goal.status = "cancelled";
+    }
+}
+
+function upsertGoalsFromUserMessage(text: string): void {
+    const candidates = extractGoalCandidatesFromUserMessage(text);
+    if (candidates.length === 0) return;
+
+    const state = readGoalsState();
+    let changed = false;
+    const timestamp = nowIso();
+
+    for (const candidate of candidates) {
+        const existing = state.goals.find((g) => isSameGoal(g.title, candidate));
+        if (existing) {
+            existing.updatedAt = timestamp;
+            if (existing.status !== "active") existing.status = "active";
+            const note = `Goal reaffirmed: ${candidate}`;
+            const normalizedNote = normalizeForCompare(note);
+            const duplicate = existing.progress.some((p) => normalizeForCompare(p.note) === normalizedNote);
+            if (!duplicate) {
+                existing.progress.push({ at: timestamp, source: "user", note });
+                compactProgress(existing);
+            } else {
+                memoryHealth.duplicateSkips += 1;
+            }
+            memoryHealth.goalUpdates += 1;
+            changed = true;
+            continue;
+        }
+
+        const id = `goal_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+        const newGoal: GoalRecord = {
+            id,
+            title: candidate,
+            status: "active",
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            tags: [],
+            progress: [{ at: timestamp, source: "user", note: `Created goal: ${candidate}` }],
+        };
+        state.goals.unshift(newGoal);
+        memoryHealth.goalCreates += 1;
+        changed = true;
+    }
+
+    if (changed) {
+        state.goals = state.goals
+            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+            .slice(0, 80);
+        writeGoalsState(state);
+    }
+}
+
+function appendGoalProgressFromTurn(userMessage: string, assistantReply: string): void {
+    const state = readGoalsState();
+    const activeGoals = state.goals.filter((g) => g.status === "active");
+    if (activeGoals.length === 0) return;
+
+    const combined = `${userMessage}\n${assistantReply}`;
+    const assistantSnippet = clip(firstSentence(assistantReply), 180);
+    if (!assistantSnippet) return;
+
+    let changed = false;
+    const timestamp = nowIso();
+
+    for (const goal of activeGoals) {
+        const score = overlapScore(goal.title, combined);
+        if (score < 0.12) continue;
+
+        const note = `Progress: ${assistantSnippet}`;
+        const normalizedNote = normalizeForCompare(note);
+        const duplicate = goal.progress.some((p) => normalizeForCompare(p.note) === normalizedNote);
+        if (duplicate) {
+            memoryHealth.duplicateSkips += 1;
+            continue;
+        }
+
+        goal.progress.push({ at: timestamp, source: "assistant", note });
+        compactProgress(goal);
+        goal.updatedAt = timestamp;
+        updateGoalStatusFromSignals(goal, combined);
+        memoryHealth.goalUpdates += 1;
+        changed = true;
+    }
+
+    if (changed) {
+        writeGoalsState(state);
+    }
+}
+
 function getRecentEpisodes(count: number): string {
     try {
-        const files = fs.readdirSync(EPISODIC_DIR)
+        const files = fs
+            .readdirSync(EPISODIC_DIR)
             .filter((f) => f.endsWith(".md"))
             .sort()
             .reverse()
@@ -98,9 +554,383 @@ function getRecentEpisodes(count: number): string {
     }
 }
 
-// ---------------------------------------------------------------------------
-// ① Bootstrap Loading — build context from all memory layers
-// ---------------------------------------------------------------------------
+function formatGoalsForPrompt(): string {
+    const state = readGoalsState();
+    if (!state.goals.length) return "";
+
+    const active = state.goals.filter((g) => g.status === "active").slice(0, 8);
+    const recentCompleted = state.goals
+        .filter((g) => g.status === "completed")
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        .slice(0, 3);
+
+    const lines: string[] = [];
+    if (active.length > 0) {
+        lines.push("Active goals:");
+        for (const goal of active) {
+            const latest = goal.progress.at(-1)?.note ?? "No progress yet";
+            lines.push(`- ${goal.title} (updated ${goal.updatedAt})`);
+            lines.push(`  latest: ${clip(latest, 160)}`);
+        }
+    }
+
+    if (recentCompleted.length > 0) {
+        lines.push("Recently completed goals:");
+        for (const goal of recentCompleted) {
+            lines.push(`- ${goal.title} (completed ${goal.updatedAt})`);
+        }
+    }
+
+    return lines.join("\n");
+}
+
+function collectBullets(markdown: string): Set<string> {
+    const bullets = markdown
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith("- "))
+        .map((line) => normalizeForCompare(line.replace(/^- /, "")));
+    return new Set(bullets);
+}
+
+function appendToSection(markdown: string, sectionName: string, bullet: string): string {
+    const base = markdown.trim() ? markdown : DEFAULT_SEMANTIC_DOC;
+    const sectionHeader = `## ${sectionName}`;
+    const headerIndex = base.indexOf(sectionHeader);
+
+    if (headerIndex === -1) {
+        return base.trimEnd() + `\n\n${sectionHeader}\n${bullet}\n`;
+    }
+
+    const afterHeader = headerIndex + sectionHeader.length;
+    const nextSection = base.indexOf("\n## ", afterHeader);
+    const insertAt = nextSection === -1 ? base.length : nextSection;
+
+    const before = base.slice(0, insertAt).trimEnd();
+    const after = base.slice(insertAt);
+    return before + "\n" + bullet + "\n" + after;
+}
+
+function appendUniqueBullet(filePath: string, section: string, rawContent: string, kind: "semantic" | "procedural"): boolean {
+    const cleaned = normalizeSpace(rawContent);
+    if (!cleaned) return false;
+
+    const bullet = `- ${cleaned}`;
+    const current = readFileOrEmpty(filePath);
+    const existingBullets = collectBullets(current);
+
+    if (existingBullets.has(normalizeForCompare(cleaned))) {
+        memoryHealth.duplicateSkips += 1;
+        return false;
+    }
+
+    const fallbackTemplate = kind === "semantic" ? DEFAULT_SEMANTIC_DOC : DEFAULT_PROCEDURAL_DOC;
+    const updated = appendToSection(current || fallbackTemplate, section, bullet);
+    writeAtomicFile(filePath, updated);
+    bumpWriteMetric(kind);
+    return true;
+}
+
+function extractUserPreferences(userMessage: string): string[] {
+    const prefs: string[] = [];
+    const text = normalizeSpace(userMessage);
+
+    const patterns: Array<[RegExp, string]> = [
+        [/\bi (?:really )?(?:like|love|prefer)\s+(.+)/i, "Prefers $1"],
+        [/\bi (?:do not|don't|hate|dislike)\s+(.+)/i, "Dislikes $1"],
+        [/\bi am in\s+([^.,\n]+)/i, "Location: $1"],
+        [/\bmy (?:timezone|time zone) is\s+([^.,\n]+)/i, "Timezone: $1"],
+    ];
+
+    for (const [rx, template] of patterns) {
+        const m = text.match(rx);
+        if (!m || !m[1]) continue;
+        prefs.push(template.replace("$1", cleanLineForGoal(m[1])));
+    }
+    return prefs;
+}
+
+function extractWorkflowRules(userMessage: string): string[] {
+    const rules: string[] = [];
+    const text = normalizeSpace(userMessage);
+
+    const rulePhrases = text
+        .split(/[.!?]/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .filter((s) => /\b(always|never|should|must|don't|do not)\b/i.test(s));
+
+    for (const phrase of rulePhrases) {
+        const cleaned = cleanLineForGoal(phrase);
+        if (cleaned.length >= 10) rules.push(cleaned);
+    }
+
+    return rules.slice(0, 4);
+}
+
+function clip(text: string, max: number): string {
+    if (!text) return "";
+    return text.length <= max ? text : text.slice(0, max - 3) + "...";
+}
+
+function firstSentence(text: string): string {
+    const cleaned = normalizeSpace(text);
+    if (!cleaned) return "";
+    const sentence = cleaned.split(/[.!?]/).map((s) => s.trim()).find(Boolean);
+    return sentence || cleaned;
+}
+
+function buildEpisodeSummary(userMessage: string, assistantReply: string): string {
+    const task = clip(cleanLineForGoal(firstSentence(userMessage)), 120);
+    const outcome = clip(cleanLineForGoal(firstSentence(assistantReply)), 150);
+    const approach = /tool|called|perplexity|wallet|search|browser|update|build|commit/i.test(assistantReply)
+        ? "Executed available tools/workflow"
+        : "Analyzed request and responded";
+    return `Task: ${task} | Approach: ${approach} | Outcome: ${outcome}`;
+}
+
+function episodeAlreadyExists(logPath: string, summary: string): boolean {
+    const current = readFileOrEmpty(logPath);
+    if (!current) return false;
+    const normalizedSummary = normalizeForCompare(summary);
+    return current
+        .split("\n")
+        .map((line) => normalizeForCompare(line))
+        .some((line) => line.includes(normalizedSummary));
+}
+
+function writeEpisode(summary: string): void {
+    ensureDirs();
+    const date = todayDateString();
+    const time = new Date().toLocaleTimeString("en-US", { hour12: false });
+    const logPath = path.join(EPISODIC_DIR, `${date}.md`);
+    const header = fs.existsSync(logPath) ? "" : `# Episodes - ${date}\n\n`;
+    fs.appendFileSync(logPath, `${header}**${time}** ${summary}\n\n`, "utf-8");
+    bumpWriteMetric("episodic");
+}
+
+function extractFromTurn(userMessage: string, assistantReply: string): void {
+    ensureDirs();
+    upsertGoalsFromUserMessage(userMessage);
+    appendGoalProgressFromTurn(userMessage, assistantReply);
+
+    for (const pref of extractUserPreferences(userMessage)) {
+        appendUniqueBullet(SEMANTIC_FILE, "User Preferences", pref, "semantic");
+    }
+
+    for (const rule of extractWorkflowRules(userMessage)) {
+        appendUniqueBullet(RULES_FILE, "Learned Behaviors", rule, "procedural");
+    }
+}
+
+function generateDeterministicSessionSummary(history: Message[]): string {
+    const turns = history
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .slice(-20)
+        .map((m) => ({
+            role: m.role,
+            text: typeof m.content === "string" ? normalizeSpace(m.content) : "",
+        }))
+        .filter((m) => m.text.length > 0);
+
+    const latestUser = turns
+        .filter((t) => t.role === "user")
+        .map((t) => t.text)
+        .at(-1) || "No recent user request.";
+    const latestAssistant = turns
+        .filter((t) => t.role === "assistant")
+        .map((t) => t.text)
+        .at(-1) || "No recent assistant response.";
+
+    const goalsState = readGoalsState();
+    const activeGoals = goalsState.goals
+        .filter((g) => g.status === "active")
+        .slice(0, 5)
+        .map((g) => `- ${g.title}`);
+
+    const completedGoals = goalsState.goals
+        .filter((g) => g.status === "completed")
+        .slice(0, 3)
+        .map((g) => `- ${g.title}`);
+
+    const lines: string[] = [];
+    lines.push("Current request focus:");
+    lines.push(`- ${clip(latestUser, 240)}`);
+    lines.push("");
+    lines.push("Latest assistant state:");
+    lines.push(`- ${clip(latestAssistant, 240)}`);
+    lines.push("");
+    lines.push("Active goals:");
+    lines.push(activeGoals.length > 0 ? activeGoals.join("\n") : "- none");
+    lines.push("");
+    lines.push("Recently completed goals:");
+    lines.push(completedGoals.length > 0 ? completedGoals.join("\n") : "- none");
+
+    return lines.join("\n");
+}
+
+async function generateSessionSummaryWithLlm(history: Message[]): Promise<string | null> {
+    const turns = history
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .slice(-80)
+        .map((m) => {
+            const content = typeof m.content === "string" ? normalizeSpace(m.content) : "";
+            return `${m.role}: ${content}`;
+        })
+        .filter((line) => line.length > 0);
+
+    if (turns.length < 2) return null;
+
+    const transcript = turns.join("\n");
+    const messages: ChatCompletionMessageParam[] = [
+        { role: "system", content: SESSION_SUMMARY_PROMPT },
+        { role: "user", content: transcript },
+    ];
+
+    try {
+        const completion = await memorySummaryExecutor.execute(
+            "memory:session_summary",
+            () =>
+                getMemoryClient().chat.completions.create({
+                    model: config.memoryModel,
+                    messages,
+                    temperature: config.memoryTemperature,
+                    max_tokens: config.memoryMaxTokens,
+                })
+        );
+        const summary = completion.choices[0]?.message?.content;
+        if (!summary || !summary.trim()) return null;
+        return summary.trim();
+    } catch {
+        return null;
+    }
+}
+
+export function getMemoryHealthMetrics() {
+    const state = readGoalsState();
+    return {
+        ...memoryHealth,
+        activeGoals: state.goals.filter((g) => g.status === "active").length,
+        completedGoals: state.goals.filter((g) => g.status === "completed").length,
+        totalGoals: state.goals.length,
+    };
+}
+
+export function getGoalSnapshots(limit = 10): GoalSnapshot[] {
+    const state = readGoalsState();
+    return state.goals
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        .slice(0, Math.max(1, limit))
+        .map((goal) => ({
+            id: goal.id,
+            title: goal.title,
+            status: goal.status,
+            updatedAt: goal.updatedAt,
+            latestProgress: goal.progress.at(-1)?.note ?? "No progress yet",
+        }));
+}
+
+function isValidGoalStatus(value: string): value is GoalStatus {
+    return value === "active" || value === "completed" || value === "paused" || value === "cancelled";
+}
+
+function sanitizeTags(tags?: string[]): string[] {
+    if (!Array.isArray(tags)) return [];
+    const out = new Set<string>();
+    for (const raw of tags) {
+        const tag = normalizeSpace(String(raw || "")).toLowerCase();
+        if (!tag) continue;
+        out.add(tag);
+        if (out.size >= 12) break;
+    }
+    return Array.from(out);
+}
+
+export function writeMemoryEntry(input: {
+    store: "semantic" | "procedural";
+    content: string;
+    section?: string;
+}): string {
+    ensureDirs();
+    const store = input.store;
+    const content = normalizeSpace(input.content || "");
+    if (!content) return "Error: content is required.";
+
+    if (store === "semantic") {
+        const section = normalizeSpace(input.section || "Known Facts");
+        const wrote = appendUniqueBullet(SEMANTIC_FILE, section, content, "semantic");
+        return wrote
+            ? `Saved to semantic memory (${section}).`
+            : "Skipped duplicate semantic memory entry.";
+    }
+
+    const section = normalizeSpace(input.section || "Learned Behaviors");
+    const wrote = appendUniqueBullet(RULES_FILE, section, content, "procedural");
+    return wrote
+        ? `Saved to procedural memory (${section}).`
+        : "Skipped duplicate procedural memory entry.";
+}
+
+export function writeGoalEntry(input: {
+    title: string;
+    progress?: string;
+    status?: GoalStatus;
+    tags?: string[];
+}): string {
+    ensureDirs();
+    const title = normalizeSpace(input.title || "");
+    if (!title) return "Error: title is required.";
+
+    const state = readGoalsState();
+    const timestamp = nowIso();
+    const progress = normalizeSpace(input.progress || "");
+    const tags = sanitizeTags(input.tags);
+    const incomingStatus = normalizeSpace(input.status || "").toLowerCase();
+    const requestedStatus = incomingStatus && isValidGoalStatus(incomingStatus)
+        ? incomingStatus
+        : undefined;
+
+    let goal = state.goals.find((g) => isSameGoal(g.title, title));
+    if (!goal) {
+        goal = {
+            id: `goal_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+            title,
+            status: requestedStatus ?? "active",
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            tags,
+            progress: [],
+        };
+        state.goals.unshift(goal);
+        memoryHealth.goalCreates += 1;
+    } else {
+        goal.updatedAt = timestamp;
+        if (requestedStatus) goal.status = requestedStatus;
+        if (tags.length > 0) {
+            const merged = new Set([...(goal.tags || []), ...tags]);
+            goal.tags = Array.from(merged).slice(0, 12);
+        }
+        memoryHealth.goalUpdates += 1;
+    }
+
+    if (progress) {
+        const duplicate = goal.progress.some((p) => normalizeForCompare(p.note) === normalizeForCompare(progress));
+        if (!duplicate) {
+            goal.progress.push({ at: timestamp, source: "system", note: progress });
+            compactProgress(goal);
+        } else {
+            memoryHealth.duplicateSkips += 1;
+        }
+    }
+
+    goal.updatedAt = timestamp;
+    state.goals = state.goals
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        .slice(0, 120);
+    writeGoalsState(state);
+
+    return `Goal saved: [${goal.status}] ${goal.title}`;
+}
 
 export function loadBootstrapContext(): string {
     ensureDirs();
@@ -116,12 +946,16 @@ export function loadBootstrapContext(): string {
         parts.push("=== PROCEDURAL MEMORY (rules & behaviors) ===\n" + procedural.trim());
     }
 
+    const goalsContext = formatGoalsForPrompt();
+    if (goalsContext.trim()) {
+        parts.push("=== PERSISTENT GOALS (mission tracking) ===\n" + goalsContext);
+    }
+
     const episodes = getRecentEpisodes(config.maxRecentEpisodes);
     if (episodes.trim()) {
         parts.push("=== EPISODIC MEMORY (recent experiences) ===\n" + episodes);
     }
 
-    // Session context (conversation summary from last compaction)
     const sessionCtx = readFileOrEmpty(SESSION_CONTEXT_FILE);
     if (sessionCtx.trim()) {
         parts.push("=== ACTIVE SESSION CONTEXT ===\n" + sessionCtx.trim());
@@ -130,329 +964,39 @@ export function loadBootstrapContext(): string {
     return parts.join("\n\n");
 }
 
-// ---------------------------------------------------------------------------
-// Memory Agent Tools — the LLM uses these to search before writing
-// ---------------------------------------------------------------------------
-
-const MEMORY_TOOLS: ChatCompletionTool[] = [
-    {
-        type: "function",
-        function: {
-            name: "search_memory",
-            description: "Search across ALL memory files (semantic, episodic, procedural) for a keyword or phrase. Returns matching lines with their source file. Use this BEFORE writing to check if something already exists.",
-            parameters: {
-                type: "object",
-                properties: {
-                    query: {
-                        type: "string",
-                        description: "The keyword or phrase to search for across all memory files",
-                    },
-                },
-                required: ["query"],
-            },
-        },
-    },
-    {
-        type: "function",
-        function: {
-            name: "read_memory",
-            description: "Read the full contents of a specific memory store. Use to understand what's already stored before deciding where to write.",
-            parameters: {
-                type: "object",
-                properties: {
-                    store: {
-                        type: "string",
-                        enum: ["semantic", "episodic", "procedural"],
-                        description: "Which memory store to read",
-                    },
-                },
-                required: ["store"],
-            },
-        },
-    },
-    {
-        type: "function",
-        function: {
-            name: "write_memory",
-            description: "Write a new entry to a memory store. Only call this AFTER searching/reading to confirm the content is genuinely new and valuable. Do NOT write duplicates or near-duplicates.",
-            parameters: {
-                type: "object",
-                properties: {
-                    store: {
-                        type: "string",
-                        enum: ["semantic", "episodic", "procedural"],
-                        description: "Which memory store to write to",
-                    },
-                    section: {
-                        type: "string",
-                        description: "The ## section to append to (e.g. 'Known Facts', 'User Preferences', 'Learned Behaviors'). For episodic, this is ignored.",
-                    },
-                    content: {
-                        type: "string",
-                        description: "The bullet point to write (without the leading '- '). Must be self-contained and concise.",
-                    },
-                },
-                required: ["store", "content"],
-            },
-        },
-    },
-];
-
-// Tool implementations
-function executeMemoryTool(name: string, args: Record<string, string>): string {
-    ensureDirs();
-
-    switch (name) {
-        case "search_memory": {
-            const query = args.query.toLowerCase();
-            const results: string[] = [];
-
-            // Search semantic
-            const semantic = readFileOrEmpty(SEMANTIC_FILE);
-            const semanticHits = semantic.split("\n")
-                .filter((line) => line.toLowerCase().includes(query))
-                .map((line) => `[semantic] ${line.trim()}`);
-            results.push(...semanticHits);
-
-            // Search procedural
-            const procedural = readFileOrEmpty(RULES_FILE);
-            const proceduralHits = procedural.split("\n")
-                .filter((line) => line.toLowerCase().includes(query))
-                .map((line) => `[procedural] ${line.trim()}`);
-            results.push(...proceduralHits);
-
-            // Search recent episodic files
-            try {
-                const files = fs.readdirSync(EPISODIC_DIR)
-                    .filter((f) => f.endsWith(".md"))
-                    .sort()
-                    .reverse()
-                    .slice(0, 5);
-
-                for (const f of files) {
-                    const content = readFileOrEmpty(path.join(EPISODIC_DIR, f));
-                    const hits = content.split("\n")
-                        .filter((line) => line.toLowerCase().includes(query))
-                        .map((line) => `[episodic/${f}] ${line.trim()}`);
-                    results.push(...hits);
-                }
-            } catch { /* empty dir */ }
-
-            if (results.length === 0) {
-                return `No matches found for "${args.query}" in any memory store.`;
-            }
-            return `Found ${results.length} match(es):\n${results.slice(0, 15).join("\n")}`;
-        }
-
-        case "read_memory": {
-            switch (args.store) {
-                case "semantic":
-                    return readFileOrEmpty(SEMANTIC_FILE) || "(empty — no semantic memory yet)";
-                case "procedural":
-                    return readFileOrEmpty(RULES_FILE) || "(empty — no procedural memory yet)";
-                case "episodic":
-                    return getRecentEpisodes(3) || "(empty — no episodes yet)";
-                default:
-                    return `Unknown store: ${args.store}`;
-            }
-        }
-
-        case "write_memory": {
-            const bullet = `- ${args.content.trim()}`;
-
-            switch (args.store) {
-                case "semantic": {
-                    let memory = readFileOrEmpty(SEMANTIC_FILE);
-                    if (!memory.trim()) {
-                        memory = "# Oasis Memory\n\n## User Preferences\n\n## Known Facts\n\n## Workflow Notes\n";
-                    }
-                    if (memory.includes(bullet)) {
-                        return `SKIPPED (duplicate): "${args.content}"`;
-                    }
-                    const section = args.section || "Known Facts";
-                    memory = appendToSection(memory, section, bullet);
-                    fs.writeFileSync(SEMANTIC_FILE, memory, "utf-8");
-                    return `✅ Written to semantic/${section}: "${args.content}"`;
-                }
-
-                case "episodic": {
-                    logEpisode(`📝 ${args.content.trim()}`);
-                    return `✅ Written to episodic log: "${args.content}"`;
-                }
-
-                case "procedural": {
-                    let rules = readFileOrEmpty(RULES_FILE);
-                    if (rules.includes(bullet)) {
-                        return `SKIPPED (duplicate): "${args.content}"`;
-                    }
-                    const section = args.section || "Learned Behaviors";
-                    rules = appendToSection(rules, section, bullet);
-                    fs.writeFileSync(RULES_FILE, rules, "utf-8");
-                    return `✅ Written to procedural/${section}: "${args.content}"`;
-                }
-
-                default:
-                    return `Unknown store: ${args.store}`;
-            }
-        }
-
-        default:
-            return `Unknown tool: ${name}`;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// ② Memory Agent Loop — tool-using extraction
-// ---------------------------------------------------------------------------
-
-const MEMORY_AGENT_PROMPT = `You are a memory manager for an AI agent called Oasis. Your job is to decide what's worth persisting from a conversation.
-
-You have tools to SEARCH, READ, and WRITE memory. Your workflow:
-
-1. First, SEARCH for key topics from the conversation to see what's already stored.
-2. READ any relevant memory stores to understand current state.
-3. Only WRITE if the information is:
-   - WORTH remembering (not trivial, not small talk)
-   - GENUINELY NEW (not already stored — you verified by searching)
-   - Correctly CATEGORIZED:
-     * semantic — stable facts, preferences, project details
-     * episodic — "Task: X | Approach: Y | Outcome: Z"
-     * procedural — "Rule: <when X, do Y>" or "Pattern: <observation>"
-
-If nothing worth writing is found, just respond with "No new memories."
-Be extremely selective — noise degrades memory quality.`;
-
 export async function flushBeforeCompaction(history: Message[]): Promise<void> {
-    if (history.length < 4) return;
-
-    const client = getMemoryClient();
-
-    const conversationText = history
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m) => `${m.role}: ${typeof m.content === "string" ? m.content : ""}`)
-        .join("\n");
-
-    const messages: ChatCompletionMessageParam[] = [
-        { role: "system", content: MEMORY_AGENT_PROMPT },
-        { role: "user", content: `Here is the conversation to process:\n\n${conversationText}` },
-    ];
+    if (history.length < 2) return;
 
     try {
-        // Tool-call loop — memory agent searches, reads, then writes
-        for (let i = 0; i < 8; i++) {
-            const completion = await memoryCompletionExecutor.execute(
-                "memory:flush_compaction",
-                () =>
-                    client.chat.completions.create({
-                        model: config.memoryModel,
-                        messages,
-                        tools: MEMORY_TOOLS,
-                        tool_choice: i < 6 ? "auto" : "none", // force finish after 6 iterations
-                        temperature: config.memoryTemperature,
-                        max_completion_tokens: config.memoryMaxTokens,
-                    })
-            );
+        const turns = history
+            .filter((m) => m.role === "user" || m.role === "assistant")
+            .slice(-40);
 
-            const msg = completion.choices[0].message;
-
-            if (msg.tool_calls && msg.tool_calls.length > 0) {
-                messages.push({
-                    role: "assistant",
-                    content: msg.content ?? null,
-                    tool_calls: msg.tool_calls,
-                } as ChatCompletionMessageParam);
-
-                for (const tc of msg.tool_calls) {
-                    const args = JSON.parse(tc.function.arguments);
-                    const result = executeMemoryTool(tc.function.name, args);
-                    console.log(`   🧠 memory.${tc.function.name}(${JSON.stringify(args)}) → ${result.slice(0, 80)}`);
-
-                    messages.push({
-                        role: "tool",
-                        tool_call_id: tc.id,
-                        content: result,
-                    });
+        for (let i = 0; i < turns.length; i++) {
+            const current = turns[i];
+            if (current.role !== "user") continue;
+            const userText = typeof current.content === "string" ? current.content : "";
+            let assistantText = "";
+            for (let j = i + 1; j < turns.length; j++) {
+                if (turns[j].role === "assistant") {
+                    const assistantContent = turns[j].content;
+                    assistantText = typeof assistantContent === "string" ? assistantContent : "";
+                    break;
                 }
-            } else {
-                // Done — agent finished its work
-                if (msg.content) {
-                    console.log(`   💾 Memory agent: ${msg.content.slice(0, 100)}`);
-                }
-                break;
             }
+            extractFromTurn(userText, assistantText);
         }
-    } catch (err) {
-        console.error("   Memory flush failed: " + (err as Error).message);
-    }
 
-    // --- Generate Conversation Summary for carry-over ---
-    try {
-        const summary = await generateConversationSummary(history);
-        if (summary) {
-            ensureDirs();
-            fs.writeFileSync(SESSION_CONTEXT_FILE, summary, "utf-8");
-            console.log("   Session context saved (" + summary.length + " chars)");
-        }
+        const summary =
+            (await generateSessionSummaryWithLlm(history)) ||
+            generateDeterministicSessionSummary(history);
+        writeAtomicFile(SESSION_CONTEXT_FILE, summary);
+        memoryHealth.lastWriteAt = nowIso();
     } catch (err) {
-        console.error("   Session summary failed: " + (err as Error).message);
+        memoryHealth.errors += 1;
+        console.error("Memory flush failed: " + (err as Error).message);
     }
 }
-
-// ---------------------------------------------------------------------------
-// Conversation Summarizer — produces a concise "carry-over" paragraph
-// ---------------------------------------------------------------------------
-
-const SUMMARY_PROMPT = `Summarize this conversation in 2-3 concise paragraphs. Focus on:
-1. What the user's current goal/task is
-2. What has been accomplished so far
-3. Any decisions made or preferences expressed
-4. What the next steps are
-
-Be specific and factual. This summary will be injected into a future prompt so the agent can continue the conversation seamlessly.`;
-
-async function generateConversationSummary(history: Message[]): Promise<string | null> {
-    if (history.length < 4) return null;
-
-    const client = getMemoryClient();
-
-    const conversationText = history
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m) => m.role + ": " + (typeof m.content === "string" ? m.content : ""))
-        .join("\n");
-
-    try {
-        const completion = await memoryCompletionExecutor.execute(
-            "memory:summary_generation",
-            () =>
-                client.chat.completions.create({
-                    model: config.memoryModel,
-                    messages: [
-                        { role: "system", content: SUMMARY_PROMPT },
-                        { role: "user", content: conversationText },
-                    ],
-                    temperature: 0.2,
-                    max_completion_tokens: config.memoryMaxTokens,
-                })
-        );
-
-        return completion.choices[0]?.message?.content || null;
-    } catch {
-        return null;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Per-turn episodic extraction (tool-using flow)
-// ---------------------------------------------------------------------------
-
-const EPISODIC_TURN_PROMPT = `You are a memory manager. Given a single exchange, decide if it's worth storing as an episodic memory.
-
-Your workflow:
-1. SEARCH for keywords from the exchange to check if a similar episode exists.
-2. If it's new and non-trivial, WRITE it to the episodic store.
-3. Format: "Task: <what user wanted> | Approach: <what was done> | Outcome: <result>"
-
-If trivial or duplicate, just respond "No new memories."`;
 
 let turnCounter = 0;
 
@@ -460,72 +1004,33 @@ export async function extractEpisodicFromTurn(
     userMessage: string,
     agentReply: string
 ): Promise<void> {
-    turnCounter++;
+    try {
+        extractFromTurn(userMessage, agentReply);
+    } catch {
+        memoryHealth.errors += 1;
+    }
+
+    turnCounter += 1;
     if (turnCounter % config.extractEveryNTurns !== 0) return;
 
-    const client = getMemoryClient();
-    const exchange = `User: ${userMessage}\nAssistant: ${agentReply}`;
-
-    const messages: ChatCompletionMessageParam[] = [
-        { role: "system", content: EPISODIC_TURN_PROMPT },
-        { role: "user", content: exchange },
-    ];
-
     try {
-        for (let i = 0; i < 4; i++) {
-            const completion = await memoryCompletionExecutor.execute(
-                "memory:episodic_extraction",
-                () =>
-                    client.chat.completions.create({
-                        model: config.memoryModel,
-                        messages,
-                        tools: MEMORY_TOOLS,
-                        tool_choice: i < 3 ? "auto" : "none",
-                        temperature: config.memoryTemperature,
-                        max_completion_tokens: config.memoryMaxTokens,
-                    })
-            );
-
-            const msg = completion.choices[0].message;
-
-            if (msg.tool_calls && msg.tool_calls.length > 0) {
-                messages.push({
-                    role: "assistant",
-                    content: msg.content ?? null,
-                    tool_calls: msg.tool_calls,
-                } as ChatCompletionMessageParam);
-
-                for (const tc of msg.tool_calls) {
-                    const args = JSON.parse(tc.function.arguments);
-                    const result = executeMemoryTool(tc.function.name, args);
-
-                    messages.push({
-                        role: "tool",
-                        tool_call_id: tc.id,
-                        content: result,
-                    });
-                }
-            } else {
-                if (msg.content && !msg.content.includes("No new memories")) {
-                    console.log(`   📝 ${msg.content.slice(0, 100)}`);
-                }
-                break;
-            }
+        const summary = buildEpisodeSummary(userMessage, agentReply);
+        const logPath = path.join(EPISODIC_DIR, `${todayDateString()}.md`);
+        if (!episodeAlreadyExists(logPath, summary)) {
+            writeEpisode(summary);
+        } else {
+            memoryHealth.duplicateSkips += 1;
         }
     } catch {
-        // Silent fail — don't interrupt the user experience
+        memoryHealth.errors += 1;
     }
 }
-
-// ---------------------------------------------------------------------------
-// ③ Session Snapshot
-// ---------------------------------------------------------------------------
 
 export function saveSessionSnapshot(history: Message[]): string | null {
     if (history.length === 0) return null;
 
     ensureDirs();
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const timestamp = nowIso().replace(/[:.]/g, "-");
     const filepath = path.join(SNAPSHOTS_DIR, `session_${timestamp}.md`);
 
     const content = history
@@ -536,71 +1041,32 @@ export function saveSessionSnapshot(history: Message[]): string | null {
         })
         .join("\n\n");
 
-    const header = `# Session Snapshot\n- saved_at: ${new Date().toISOString()}\n- messages: ${history.length}\n\n`;
-
-    fs.writeFileSync(filepath, header + content, "utf-8");
+    const header = `# Session Snapshot\n- saved_at: ${nowIso()}\n- messages: ${history.length}\n\n`;
+    writeAtomicFile(filepath, header + content);
     return filepath;
 }
 
-// ---------------------------------------------------------------------------
-// ④ User-Initiated Memory
-// ---------------------------------------------------------------------------
-
 export function rememberThis(text: string): string {
     ensureDirs();
-    const bullet = `- ${text.trim()}`;
-    const memory = readFileOrEmpty(SEMANTIC_FILE);
+    const clean = normalizeSpace(text);
+    if (!clean) return "Nothing to remember.";
 
-    if (memory.includes(bullet)) {
-        return `Already remembered: ${text.trim()}`;
+    const wrote = appendUniqueBullet(SEMANTIC_FILE, "Known Facts", clean, "semantic");
+    upsertGoalsFromUserMessage(clean);
+    writeEpisode(`User explicitly stored: "${clip(clean, 160)}"`);
+
+    if (!wrote) {
+        return `Already remembered: ${clean}`;
     }
-
-    const updated = appendToSection(memory, "Known Facts", bullet);
-    fs.writeFileSync(SEMANTIC_FILE, updated, "utf-8");
-
-    logEpisode(`User explicitly stored: "${text.trim()}"`);
-
-    return `✅ Remembered: ${text.trim()}`;
-}
-
-// ---------------------------------------------------------------------------
-// Episodic log helper
-// ---------------------------------------------------------------------------
-
-function logEpisode(summary: string): void {
-    ensureDirs();
-    const date = todayDateString();
-    const time = new Date().toLocaleTimeString("en-US", { hour12: false });
-    const logPath = path.join(EPISODIC_DIR, `${date}.md`);
-
-    const header = fs.existsSync(logPath) ? "" : `# Episodes — ${date}\n\n`;
-    fs.appendFileSync(logPath, `${header}**${time}** ${summary}\n\n`, "utf-8");
+    return `Remembered: ${clean}`;
 }
 
 export function logTurnSummary(userMessage: string, agentReply: string): void {
-    const userSnippet = userMessage.slice(0, 100) + (userMessage.length > 100 ? "..." : "");
-    const agentSnippet = agentReply.slice(0, 150) + (agentReply.length > 150 ? "..." : "");
-    logEpisode(`User: ${userSnippet}\n> Agent: ${agentSnippet}`);
-}
-
-// ---------------------------------------------------------------------------
-// Markdown section manipulation
-// ---------------------------------------------------------------------------
-
-function appendToSection(markdown: string, sectionName: string, bullet: string): string {
-    const sectionHeader = `## ${sectionName}`;
-    const headerIndex = markdown.indexOf(sectionHeader);
-
-    if (headerIndex === -1) {
-        return markdown.trimEnd() + `\n\n${sectionHeader}\n${bullet}\n`;
+    try {
+        const userSnippet = clip(userMessage, 120);
+        const agentSnippet = clip(agentReply, 180);
+        writeEpisode(`User: ${userSnippet}\n> Agent: ${agentSnippet}`);
+    } catch {
+        memoryHealth.errors += 1;
     }
-
-    const afterHeader = headerIndex + sectionHeader.length;
-    const nextSection = markdown.indexOf("\n## ", afterHeader);
-    const insertAt = nextSection === -1 ? markdown.length : nextSection;
-
-    const before = markdown.slice(0, insertAt).trimEnd();
-    const after = markdown.slice(insertAt);
-
-    return before + "\n" + bullet + "\n" + after;
 }

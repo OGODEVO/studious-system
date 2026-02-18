@@ -21,6 +21,7 @@ import { AVAILABLE_TOOLS } from "../tools/registry.js";
 import { startScheduler, stopScheduler, pushSchedulerHistory } from "../runtime/scheduler.js";
 import { history, saveSession, loadSession, startAutosave, stopAutosave } from "../utils/context.js";
 import type { ChatCompletionContentPart } from "openai/resources/chat/completions";
+import { getGoalSnapshots } from "../memory/manager.js";
 
 config();
 const execAsync = promisify(exec);
@@ -155,6 +156,7 @@ bot.command("start", (ctx) => {
         "/tx <hash> \\- Inspect a transaction on current RPC\n" +
         "/revoke \\- Revoke 'Allow All' permission\n" +
         "/update \\- Pull latest code \\& restart\n" +
+        "/goals \\- Show tracked persistent goals\n" +
         "/tokencount \\- Show context token usage\n" +
         "/save \\- Save chat history to disk\n" +
         "/reset \\- Clear chat history",
@@ -261,6 +263,23 @@ bot.command("tokencount", async (ctx) => {
         lines.push(
             `Last turn: context=${lastTokenUsage.contextTokens}, reply=${lastTokenUsage.replyTokens}, total=${lastTokenUsage.totalTokens}`
         );
+    }
+    await ctx.reply(lines.join("\n"));
+});
+
+bot.command("goals", async (ctx) => {
+    if (!authCheck(ctx.chat.id.toString())) { ctx.reply("⛔️ Unauthorized."); return; }
+    const goals = getGoalSnapshots(12);
+    if (goals.length === 0) {
+        await ctx.reply("No persistent goals tracked yet.");
+        return;
+    }
+
+    const lines = ["Persistent goals:"];
+    for (const g of goals) {
+        lines.push(`- [${g.status}] ${g.title}`);
+        lines.push(`  updated: ${g.updatedAt}`);
+        lines.push(`  latest: ${g.latestProgress}`);
     }
     await ctx.reply(lines.join("\n"));
 });

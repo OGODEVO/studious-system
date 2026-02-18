@@ -4,3 +4,5 @@ dist/
 screenshots/
 memory/
 .gemini/
+
+.DS_Store
